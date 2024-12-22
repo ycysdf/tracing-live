@@ -1,0 +1,17 @@
+[package]
+name = "tracing-lv-proto"
+version = "0.0.1-beta.3"
+edition = "2021"
+description = "Track your apps in real time"
+license = "MIT"
+
+[features]
+client = []
+server = []
+
+[dependencies]
+tonic = { version = "0.12", features = ["prost", "codegen"], default-features = false }
+prost = "0.13"
+serde_json = "1"
+#[build-dependencies]
+#tonic-build = { version = "0.12", features = ["prost"] }

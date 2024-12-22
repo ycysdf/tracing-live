@@ -1,0 +1,11 @@
+[package]
+edition = "2021"
+name = "entity"
+version = "0.1.0"
+
+[dependencies]
+sea-orm = { version = "1.1", features = ["sqlx-postgres", "with-bigdecimal", "with-uuid", "with-json", "with-chrono", "runtime-tokio-rustls", "seaography"] }
+#tokio = { version = "1.29.1", features = ["macros", "rt-multi-thread"] }
+#tracing = { version = "0.1.37" }
+#tracing-subscriber = { version = "0.3.17" }
+

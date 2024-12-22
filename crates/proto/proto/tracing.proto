@@ -1,0 +1,121 @@
+syntax = "proto3";
+
+package tracing;
+
+message PosInfo {
+  string module_path = 1;
+  string file_line = 2;
+}
+message SpanInfo {
+  uint64 t_id = 1;
+  string name = 2;
+  string file_line = 3;
+}
+
+
+message FieldValue {
+  oneof variant {
+    double f64 = 1;
+    sint64 i64 = 2;
+    uint64 u64 = 3;
+    bool bool = 4;
+    string string = 5;
+    bool  null = 6;
+  }
+}
+
+enum Level {
+  TRACE = 0;
+  DEBUG = 1;
+  INFO = 2;
+  WARN = 3;
+  ERROR = 4;
+}
+
+message TracingRecordResult {}
+message Ping {}
+message PingResult {}
+
+
+message SpanCreate {
+  int64 record_time = 1;
+  SpanInfo span_info = 2;
+  PosInfo pos_info = 3;
+  SpanInfo parent_span_info = 4;
+  map<string, FieldValue> fields = 5;
+  string target = 6;
+  Level level = 7;
+}
+
+message SpanEnter {
+  int64 record_time = 1;
+  SpanInfo span_info = 2;
+  PosInfo pos_info = 3;
+}
+message SpanLeave {
+  int64 record_time = 1;
+  SpanInfo span_info = 2;
+  PosInfo pos_info = 3;
+
+}
+message SpanClose {
+  int64 record_time = 1;
+  SpanInfo span_info = 2;
+  PosInfo pos_info = 3;
+
+}
+message SpanRecordField {
+  int64 record_time = 1;
+  SpanInfo span_info = 2;
+  PosInfo pos_info = 3;
+  map<string, FieldValue> fields = 4;
+}
+
+message Event {
+  int64 record_time = 1;
+  SpanInfo span_info = 2;
+  PosInfo pos_info = 3;
+  map<string, FieldValue> fields = 4;
+  string target = 5;
+  Level level = 6;
+  string message = 7;
+}
+message AppStart {
+  int64 record_time = 1;
+  bytes id = 2;
+  string node_id = 3;
+  bytes run_id = 4;
+  string name = 5;
+  string version = 6;
+  map<string, FieldValue> data = 8;
+  double rtt = 9;
+}
+message AppStop {
+}
+
+message RecordParam {
+  oneof Variant {
+    AppStart app_start = 1;
+    SpanCreate span_create = 2;
+    SpanEnter span_enter = 3;
+    SpanLeave span_leave = 4;
+    SpanClose span_close = 5;
+    SpanRecordField span_record_field = 6;
+    Event event = 7;
+    AppStop app_stop = 8;
+  }
+  int64 send_time = 30;
+}
+
+service TracingService {
+  rpc app_run(stream RecordParam) returns (TracingRecordResult) {}
+  rpc ping(Ping) returns (PingResult) {}
+  //  rpc span_create(SpanCrateParam) returns (TracingRecordResult) {}
+  //  rpc span_enter(SpanEnterParam) returns (TracingRecordResult) {}
+  //  rpc span_leave(SpanLeaveParam) returns (TracingRecordResult) {}
+  //  rpc span_close(SpanCloseParam) returns (TracingRecordResult) {}
+  //  rpc span_record_field(SpanRecordFieldParam) returns (TracingRecordResult) {}
+  //  rpc event(EventParam) returns (TracingRecordResult) {}
+  //  rpc app_start(AppStartParam) returns (TracingRecordResult) {}
+  //  rpc app_stop(AppStopParam) returns (TracingRecordResult) {}
+}

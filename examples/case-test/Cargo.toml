@@ -1,0 +1,14 @@
+[package]
+name = "case-test"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+#tracing-lv = { version = "0.0.1-beta.3" }
+tracing-lv = { version = "0.0.1-beta.3", path = "../../libs/client" }
+tracing = "0.1"
+tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4"] }
+anyhow = "1"
+rand = "0.8.5"

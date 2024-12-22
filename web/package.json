@@ -1,0 +1,58 @@
+{
+  "name": "example-with-tailwindcss",
+  "type": "module",
+  "scripts": {
+    "start": "farm",
+    "dev": "farm",
+    "build": "farm build",
+    "serve": "farm preview",
+    "gen-by-openai": "docker run -v .:/local --net=host --rm openapitools/openapi-generator-cli generate -i http://192.168.3.9/api-docs/openapi.json -g typescript-fetch -o /local/src/openapi --skip-validate-spec --additional-properties=paramNaming=original",
+    "gen-by-openai2": "docker run -v .:/local --rm openapitools/openapi-generator-cli generate -i http://localhost:8001/api-docs/openapi.json -g typescript-fetch -o /local/src/openapi "
+  },
+  "dependencies": {
+    "@iconify-icon/solid": "^2.2.0",
+    "@kobalte/core": "^0.13.7",
+    "@solid-primitives/bounds": "^0.0.122",
+    "@solid-primitives/keyed": "^1.2.3",
+    "@solid-primitives/list": "^0.0.101",
+    "@solid-primitives/storage": "^4.2.1",
+    "@solid-primitives/virtual": "^0.1.0",
+    "@solidjs/router": "^0.14.10",
+    "autoprefixer": "^10.4.20",
+    "byte-size": "^9.0.1",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "core-js": "^3.39.0",
+    "humanize-duration": "^3.32.1",
+    "lucide-solid": "^0.453.0",
+    "qs": "^6.13.1",
+    "solid-js": "^1.9.3",
+    "solid-motionone": "^1.0.2",
+    "tailwind-merge": "^2.5.5",
+    "tailwindcss-animate": "^1.0.7"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "@farmfe/cli": "^1.0.4",
+    "@farmfe/core": "^1.5.0",
+    "@farmfe/js-plugin-postcss": "^1.10.0",
+    "@types/byte-size": "^8.1.2",
+    "@types/humanize-duration": "^3.27.4",
+    "@types/qs": "^6.9.17",
+    "@typescript-eslint/parser": "^8.18.1",
+    "autoprefixer": "^10.4.17",
+    "eslint": "^9.17.0",
+    "eslint-plugin-solid": "^0.14.5",
+    "globals": "^15.13.0",
+    "postcss": "^8.4.49",
+    "solid-devtools": "^0.30.1",
+    "solid-refresh": "~0.7.5",
+    "tailwindcss": "^3.4.16",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.18.1",
+    "vite-plugin-solid": "^2.11.0"
+  }
+}
