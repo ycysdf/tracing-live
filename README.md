@@ -1,6 +1,6 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/ycysdf/tracing-live#LICENSE)
-[![Crates.io](https://img.shields.io/crates/v/tracing-live.svg)](https://crates.io/crates/tracing-live)
-[![Docs](https://docs.rs/tracing-live/badge.svg)](https://docs.rs/tracing-live)
+[![Crates.io](https://img.shields.io/crates/v/tracing-live.svg)](https://crates.io/crates/tracing-lv)
+[![Docs](https://docs.rs/tracing-live/badge.svg)](https://docs.rs/tracing-lv)
 
 
 # Tracing Live
