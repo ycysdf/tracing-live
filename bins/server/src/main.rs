@@ -3,6 +3,7 @@
 
 mod dyn_query;
 pub mod event_service;
+mod global_data;
 pub mod grpc_service;
 pub mod record;
 pub mod running_app;
@@ -10,7 +11,6 @@ mod setting_service;
 mod tracing_service;
 mod web_error;
 mod web_service;
-mod global_data;
 
 use crate::grpc_service::TracingServiceImpl;
 use crate::record::TracingRecordVariant;
@@ -48,7 +48,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
         .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
             format!(
@@ -95,17 +95,16 @@ async fn main() {
 
     let tracing_service = tracing_service::TracingService::new(dc.clone());
 
-    tracing_service.init().await.unwrap();
+    tracing_service.init().await?;
 
     let (msg_sender, msg_receiver) = flume::unbounded::<RunMsg>();
 
-    let handle_records_future = {
+    let handle_records_future = tokio::spawn({
         let tracing_service = tracing_service.clone();
         let id = tracing_service
             .query_last_record_id()
             .await
-            .map_err(|err| Status::internal(format!("query_last_record_id error. {err}")))
-            .unwrap()
+            .map_err(|err| Status::internal(format!("query_last_record_id error. {err}")))?
             .unwrap_or(0);
         async move {
             let mut running_apps = RunningApps::new(
@@ -118,50 +117,54 @@ async fn main() {
             );
             running_apps.handle_records(msg_receiver).await
         }
-    };
+    });
     let web_router = web_service::router(tracing_service.clone(), msg_sender.clone())
         .layer(CompressionLayer::new());
-    let https_web_serve_future = axum_server::bind_rustls(
-        web_addr,
-        RustlsConfig::from_pem(
-            include_bytes!("../cert/server.pem").into(),
-            include_bytes!("../cert/server.key").into(),
+    let https_web_serve_future = tokio::spawn(
+        axum_server::bind_rustls(
+            web_addr,
+            RustlsConfig::from_pem(
+                include_bytes!("../cert/server.pem").into(),
+                include_bytes!("../cert/server.key").into(),
+            )
+            .await?,
         )
-        .await
-        .unwrap(),
-    )
-    .serve(web_router.clone().into_make_service());
-
-    let http_web_serve_future = axum::serve(
-        TcpListener::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 80)))
-            .await
-            .unwrap(),
-        web_router.clone().into_make_service(),
+        .serve(web_router.clone().into_make_service()),
     );
 
-    let grpc_serve_future = pin!(Server::builder()
-        .accept_http1(false)
-        .add_service(
-            TracingServiceServer::new(TracingServiceImpl::new(tracing_service, msg_sender),)
-                .accept_compressed(CompressionEncoding::Zstd)
-                .send_compressed(CompressionEncoding::Zstd)
+    let http_web_serve_future = tokio::spawn(
+        axum::serve(
+            TcpListener::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 80))).await?,
+            web_router.clone().into_make_service(),
         )
-        .serve(grpc_addr));
+        .into_future(),
+    );
+
+    let grpc_serve_future = tokio::spawn(
+        Server::builder()
+            .accept_http1(false)
+            .add_service(
+                TracingServiceServer::new(TracingServiceImpl::new(tracing_service, msg_sender))
+                    .accept_compressed(CompressionEncoding::Zstd)
+                    .send_compressed(CompressionEncoding::Zstd),
+            )
+            .serve(grpc_addr),
+    );
     info!("web serve: {:?}", web_addr);
     info!("grpc serve: {:?}", grpc_addr);
 
-    tokio::select! {
+    Ok(tokio::select! {
         r = https_web_serve_future => {
-            r.unwrap()
+            r??
         }
         r = http_web_serve_future => {
-            r.unwrap()
+            r??
         }
         r = grpc_serve_future => {
-            r.unwrap()
+            r??
         }
         r = handle_records_future => {
-            r.unwrap()
+            r??
         }
-    }
+    })
 }
