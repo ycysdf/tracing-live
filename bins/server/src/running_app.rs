@@ -1,5 +1,9 @@
 use crate::event_service::EventService;
-use crate::grpc_service::{SpanFullInfo, SpanFullInfoBase, SpanInfo, TracingFields, TracingRecordFlags, TracingServiceImpl, FIELD_DATA_EMPTY_CHILDREN, FIELD_DATA_FIRST_EVENT, FIELD_DATA_FLAGS, FIELD_DATA_REPEATED_COUNT};
+use crate::grpc_service::{
+    SpanFullInfo, SpanFullInfoBase, SpanInfo, TracingFields, TracingRecordFlags,
+    TracingServiceImpl, FIELD_DATA_EMPTY_CHILDREN, FIELD_DATA_FIRST_EVENT, FIELD_DATA_FLAGS,
+    FIELD_DATA_REPEATED_COUNT,
+};
 use crate::record::{AppRunInfo, SpanId, TracingRecordVariant};
 use crate::tracing_service::{
     AppRunDto, BigSerialId, TracingRecordBatchInserter, TracingRecordDto, TracingRecordFilter,
@@ -286,7 +290,14 @@ impl RunningApps {
                         );
                         return PreHandleResult::Continue;
                     }
-                } else if let TracingRecordVariant::Event { .. } = &record {
+                } else if let TracingRecordVariant::AppStart { app_info, .. } = &record {
+                    if let Some(app) = self
+                        .running_apps
+                        .insert(app_info.run_id, RunningApp::new(app_info.clone()))
+                    {
+                        warn!("app {} already running!", app.app_info.id);
+                        return PreHandleResult::Continue;
+                    }
                 }
                 self.buf_records.push_back(record);
                 if self.buf_records.len() >= self.max_buf_count + 1 {
@@ -692,14 +703,6 @@ impl RunningApps {
                         name,
                         fields,
                     } => {
-                        if let Some(app) = self
-                            .running_apps
-                            .insert(app_info.run_id, RunningApp::new(app_info.clone()))
-                        {
-                            warn!("app {} already running!", app.app_info.id);
-                            continue;
-                        }
-
                         let _r = self.tracing_service.try_insert_app(app_info.id).await?;
                         let _r = self
                             .tracing_service
@@ -722,7 +725,9 @@ impl RunningApps {
                         exception_end,
                         ..
                     } => {
-                        let mut running_app = self.remove_running_app_mut(&app_info).unwrap();
+                        let Some(mut running_app) = self.remove_running_app_mut(&app_info) else {
+                            continue;
+                        };
                         let created_spans = core::mem::take(&mut running_app.created_spans);
                         for (t_id, created_span) in created_spans {
                             set_exception_end_for_span_run(
@@ -804,9 +809,7 @@ impl RunningApps {
         writeln!(
             batch_inserter,
             r#"update tracing_record set fields = fields||'{{"{}": {}}}'::jsonb where id = '{}';"#,
-            FIELD_DATA_EMPTY_CHILDREN,
-            false,
-            created_span.record_id,
+            FIELD_DATA_EMPTY_CHILDREN, false, created_span.record_id,
         )?;
         Ok((
             TracingRecordVariant::SpanRecord { info },
