@@ -29,8 +29,6 @@ async fn main() -> anyhow::Result<()> {
         .await?)
 }
 
-const FLAGS_AUTO_EXPAND: bool = true;
-
 async fn app_start() {
     info!("app_start first event");
     app_init().await;

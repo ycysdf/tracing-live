@@ -498,8 +498,13 @@ impl AppRunLifetime {
         }))
     }
 
-    async fn app_stop(mut self, exception_end: bool) -> Result<(), Status> {
-        let record_time = Utc::now();
+    async fn app_stop(mut self, normal_stop: Option<DateTime<Utc>>) -> Result<(), Status> {
+        let exception_end = normal_stop.is_none();
+        let record_time = normal_stop.clone().unwrap_or_else(||GLOBAL_DATA.get_node_now_timestamp_nanos(self.app_run_info.run_id)
+           .map(DateTime::from_timestamp_nanos).unwrap_or_else(|| {
+            warn!("not found global app_running");
+            Utc::now()
+        }));
 
         let running_spans = self.running_spans.clone();
 
@@ -632,12 +637,12 @@ impl TracingService for TracingServiceImpl {
         // Tonic Bug: ?. Future is sometimes canceled
         tokio::spawn(
             async move {
-                let mut exception_end = true;
+                let mut normal_stop = None;
                 let result = async {
                     while let Some(result) = streaming.next().await {
                         match result {
                             Ok(RecordParam {
-                                send_time: _, // TODO: Check if time is too long
+                                send_time,
                                 variant,
                             }) => {
                                 let variant = variant.unwrap();
@@ -668,7 +673,7 @@ impl TracingService for TracingServiceImpl {
                                     }
                                     record_param::Variant::AppStop(_) => {
                                         info!("app stop");
-                                        exception_end = false;
+                                        normal_stop = Some(send_time);
                                         break;
                                     }
                                 };
@@ -685,19 +690,20 @@ impl TracingService for TracingServiceImpl {
                     Ok::<(), Status>(())
                 }
                 .await;
-                GLOBAL_DATA.remove_running_app(app_run_lifetime.app_run_info.run_id);
                 if let Err(err) = result {
                     error!("{err}");
                 }
-                if exception_end {
+                if normal_stop.is_none() {
                     warn!(run_info=?app_run_lifetime.app_run_info,"app exception_end");
                 }
+                let run_id =app_run_lifetime.app_run_info.run_id;
                 app_run_lifetime
-                    .app_stop(exception_end)
+                    .app_stop(normal_stop.map(DateTime::from_timestamp_nanos))
                     .await
                     .inspect_err(|err| {
                         error!("app_stop error: {err}");
                     })?;
+                GLOBAL_DATA.remove_running_app(run_id);
 
                 info!("app lifetime end");
                 Ok(Response::new(TracingRecordResult {}))

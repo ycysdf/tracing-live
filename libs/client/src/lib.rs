@@ -13,7 +13,7 @@ use std::fmt::{Debug, Display, Formatter};
 pub use tokio::*;
 use tracing::field::{Field, Visit};
 use tracing::span::{Attributes, Record};
-use tracing::{Event, Id, Metadata, Subscriber};
+use tracing::{Id, Metadata, Subscriber};
 use tracing_subscriber::layer::Context;
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::Layer;
@@ -180,7 +180,7 @@ where
             .or_else(|| _ctx.lookup_current())
             .map(|n| n.id().into_u64());
         let parent = parent_id
-            .map(|n| _ctx.span(&tracing::Id::from_u64(n)))
+            .map(|n| _ctx.span(&Id::from_u64(n)))
             .flatten();
         let msg = TLMsg::SpanCreate {
             date: Local::now(),
@@ -217,7 +217,7 @@ where
 
         self.subscriber.on_msg(msg);
     }
-    fn on_event(&self, _event: &Event<'_>, _ctx: Context<'_, S>) {
+    fn on_event(&self, _event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
         if _event.metadata().target().starts_with("h2::proto") {
             return;
         }

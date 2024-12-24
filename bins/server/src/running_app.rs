@@ -545,7 +545,12 @@ impl RunningApps {
                     TracingRecordVariant::SpanClose { info } => {
                         self.scoped_batch_inserter(|me, batch_inserter| {
                             let running_app = me.get_running_app_mut(&info.app_info).unwrap();
-                            set_exception_end_for_sub_spans(info.t_id, batch_inserter, running_app)
+                            set_exception_end_for_sub_spans(
+                                info.t_id,
+                                batch_inserter,
+                                running_app,
+                                info.record_time,
+                            )
                         })?;
                         let Some(running_app) = self.get_running_app_mut(&info.app_info) else {
                             continue;
@@ -733,11 +738,13 @@ impl RunningApps {
                             set_exception_end_for_span_run(
                                 &created_span.id,
                                 &mut self.batch_inserter,
+                                record_time.clone(),
                             )?;
                             set_exception_end_for_sub_spans(
                                 t_id,
                                 &mut self.batch_inserter,
                                 &mut running_app,
+                                record_time.clone()
                             )?;
                         }
                         let app_run_dto = self
@@ -825,6 +832,7 @@ fn set_exception_end_for_sub_spans(
     span_t_id: u64,
     batch_inserter: &mut SqlBatchExecutor,
     running_app: &mut RunningApp,
+    record_time: DateTime<Utc>,
 ) -> Result<(), std::fmt::Error> {
     let Some(created_span) = running_app.get_created_span_mut(span_t_id) else {
         return Ok(());
@@ -832,8 +840,8 @@ fn set_exception_end_for_sub_spans(
 
     let sub_span_t_ids = core::mem::take(&mut created_span.sub_span_t_ids);
     for (sub_span_t_id, id, _) in sub_span_t_ids.iter().filter(|n| !n.2) {
-        set_exception_end_for_span_run(id, batch_inserter)?;
-        set_exception_end_for_sub_spans(*sub_span_t_id, batch_inserter, running_app)?;
+        set_exception_end_for_span_run(id, batch_inserter, record_time)?;
+        set_exception_end_for_sub_spans(*sub_span_t_id, batch_inserter, running_app, record_time)?;
     }
     Ok(())
 }
@@ -842,11 +850,11 @@ fn set_exception_end_for_sub_spans(
 fn set_exception_end_for_span_run(
     id: &Uuid,
     batch_inserter: &mut SqlBatchExecutor,
+    record_time: DateTime<Utc>,
 ) -> Result<(), std::fmt::Error> {
     writeln!(
         batch_inserter,
-        r#"update tracing_span_run set exception_end={} where id = '{}';"#,
-        Utc::now(),
-        id
+        r#"update tracing_span_run set exception_end='{}' where id = '{}';"#,
+        record_time, id
     )
 }
