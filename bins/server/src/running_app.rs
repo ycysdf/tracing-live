@@ -47,7 +47,7 @@ struct CreatedSpan {
     #[deref]
     span_base_info: Arc<SpanFullInfoBase>,
     parent_span_t_id: Option<u64>,
-    total_enter_duration: Duration,
+    total_enter_duration: chrono::Duration,
     enter_span: Option<EnteredSpan>,
     record_id: BigInt,
     last_record_filed_id: Option<(BigInt, TracingFields)>,
@@ -259,7 +259,7 @@ impl RunningApps {
                         CreatedSpan {
                             id: Uuid::new_v4(),
                             parent_span_t_id: info.running_span.parent_span_t_id,
-                            total_enter_duration: Duration::ZERO,
+                            total_enter_duration: Default::default(),
                             enter_span: None,
                             record_id: UN_SET_RECORD_ID,
                             last_record_filed_id: None,
@@ -574,13 +574,14 @@ impl RunningApps {
 
                         let span_id = info.running_span.id;
                         let duration = info.record_time - created_span.record_time;
-                        let duration = duration.to_std()?;
                         let idle_duration = duration - created_span.total_enter_duration;
+                        let idle_duration = idle_duration.num_milliseconds() as f64 / 1000.;
+                        let busy_duration = created_span.total_enter_duration.num_milliseconds() as f64 / 1000.;
                         writeln!(
                             self.batch_inserter,
                             r#"update tracing_span_run set busy_duration = '{}',idle_duration='{}',close_record_id='{}' where id = '{}';"#,
-                            created_span.total_enter_duration.as_secs_f64(),
-                            idle_duration.as_secs_f64(),
+                            busy_duration,
+                            idle_duration,
                             record_id,
                             created_span.id,
                         )?;
@@ -589,8 +590,8 @@ impl RunningApps {
                             app_run_id: app_info.run_id,
                             span_id,
                             run_time: created_span.record_time.fixed_offset(),
-                            busy_duration: Some(created_span.total_enter_duration.as_secs_f64()),
-                            idle_duration: Some(idle_duration.as_secs_f64()),
+                            busy_duration: Some(busy_duration),
+                            idle_duration: Some(idle_duration),
                             record_id: created_span.record_id,
                             close_record_id: Some(record_id),
                             exception_end: Default::default(),
@@ -676,15 +677,25 @@ impl RunningApps {
                             continue;
                         };
                         let duration = info.record_time - enter_span.record_time;
-                        let duration = duration.to_std()?;
-                        created_span.total_enter_duration += duration;
+                        if let Some(r) = created_span
+                            .total_enter_duration
+                            .checked_add(&duration)
+                        {
+                            created_span.total_enter_duration = r;
+                        } else {
+                            warn!(
+                                "app {} span {} total_enter_duration overflow",
+                                app_info.id, info.running_span.id
+                            );
+                        }
                         let created_span_id = created_span.id;
                         let enter_span_id = enter_span.id;
 
+                        let duration_secs = (duration.num_milliseconds() as f64) / 1000.;
                         writeln!(
                             self.batch_inserter,
                             r#"update tracing_span_enter set duration = '{}',leave_record_id='{}' where id = '{}';"#,
-                            duration.as_secs_f64(),
+                            duration_secs,
                             record_id,
                             enter_span_id,
                         )?;
@@ -695,7 +706,7 @@ impl RunningApps {
                                 enter_time: enter_span.record_time.fixed_offset(),
                                 enter_elapsed: Some(0.),
                                 already_run: None,
-                                duration: Some(duration.as_secs_f64()),
+                                duration: Some(duration_secs),
                                 record_id: enter_span.record_id,
                                 leave_record_id: Some(record_id),
                             },
@@ -744,7 +755,7 @@ impl RunningApps {
                                 t_id,
                                 &mut self.batch_inserter,
                                 &mut running_app,
-                                record_time.clone()
+                                record_time.clone(),
                             )?;
                         }
                         let app_run_dto = self

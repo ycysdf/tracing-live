@@ -653,9 +653,12 @@ impl TracingService {
             let stop_time = last_enter
                 .map(|n| {
                     n.enter_time
-                        + TimeDelta::milliseconds(
+                        + TimeDelta::try_milliseconds(
                             n.duration.map(|n| n * 1000.).unwrap_or_default() as _
-                        )
+                        ).unwrap_or_else(|| {
+                        warn!("TimeDelta::try_milliseconds error. duration: {}", n.duration.map(|n| n * 1000.).unwrap_or_default());
+                        Default::default()
+                    })
                 })
                 .unwrap_or(item.run_time);
             tracing_span_run::Entity::update(tracing_span_run::ActiveModel {
