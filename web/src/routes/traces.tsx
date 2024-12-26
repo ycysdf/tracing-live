@@ -5,14 +5,14 @@ import {
   Accessor,
   createContext,
   createEffect,
-  createMemo, createSelector,
+  createMemo, createResource, createSelector,
   createSignal,
   For,
   JSX, Match,
   onCleanup,
-  onMount, Show,
+  onMount, Setter, Show,
   Signal,
-  splitProps,
+  splitProps, startTransition,
   Suspense,
   Switch, untrack,
   useContext, useTransition
@@ -41,7 +41,7 @@ import {AUTO_EXPAND, createMultiSelection, getFlags, useIsolateTransition} from 
 import {Button} from "~/components/ui/button";
 import HTMLAttributes = JSX.HTMLAttributes;
 import {Checkbox} from "~/components/ui/checkbox";
-import {createStore, produce, reconcile} from "solid-js/store";
+import {createMutable, createStore, produce, reconcile, unwrap} from "solid-js/store";
 import {cn} from "~/lib/utils";
 import qs from "qs";
 import byteSize, {ByteSizeOptions} from "byte-size";
@@ -49,6 +49,7 @@ import humanizeDuration from "humanize-duration";
 import {Key} from "@solid-primitives/keyed";
 import {VirtualList} from "@solid-primitives/virtual";
 import {Index} from 'solid-js';
+import {debounce, Scheduled} from "@solid-primitives/scheduled";
 
 const CurSelectedTreeItem = createContext<Signal<TracingTreeRecordDto>>();
 
@@ -119,9 +120,9 @@ export function NodeItem(allProps: {
            "hover:bg-stone-50": !props.isSelected,
            ...rootProps.classList
          }}>
-      <div class="flex justify-between items-baseline">
+      <div class="flex justify-between items-baseline overflow-hidden gap-1">
         <div
-          class="text-lg font-bold text-ellipsis overflow-hidden whitespace-nowrap">{(props.data.data ?? {})['name'] ?? (props.data.data ?? {})['node_name'] ?? props.data.nodeId}</div>
+          class="text-lg font-bold flex-shrink-0 text-ellipsis overflow-hidden whitespace-nowrap">{(props.data.data ?? {})['name'] ?? (props.data.data ?? {})['node_name'] ?? props.data.nodeId}</div>
         <div
           class="text-xsm text-ellipsis overflow-hidden whitespace-nowrap">{(props.data.data ?? {})['second_name'] ?? (props.data.data ?? {})['os_name']}</div>
       </div>
@@ -144,21 +145,27 @@ export function NodeItem(allProps: {
   )
 }
 
-export function useNodePageData(input: Accessor<NodesPageRequest>): Accessor<NodesPageDto> {
-  let [data, setData] = createStore<NodesPageDto>(undefined);
-  let result = createAsync(async () => {
-    let nodesPage = await getNodesPage(input());
-    setData(reconcile(nodesPage));
-    return data
-  });
 
-  createEffect(() => {
-    if (result().nodes.length == 0) {
+export function useNodePageData(input: Accessor<NodesPageRequest>): [NodesPageDto, IsLoadingObj] {
+  let [data, setData] = createStore<NodesPageDto>(undefined);
+  let isLoading = createIsLoading();
+  let nodesPageAccessor = createAsync(async () => {
+    return await isLoading.loadingScoped(async () => {
+      return await getNodesPage(input())
+    });
+  });
+  createEffect(async () => {
+    let nodesPage = nodesPageAccessor();
+    setData(reconcile(nodesPage));
+    if (nodesPage == null) {
+      return;
+    }
+    if (nodesPage.nodes.length == 0) {
       return;
     }
     let params_string = qs.stringify({
-      ...input(),
-      after_record_id: untrack(() => result().nodes[0].recordId)
+      ...untrack(() => input()),
+      after_record_id: nodesPage.nodes[0].recordId
     });
 
     const eventSource = new EventSource(`${BASE_URL}/node_page_subscribe?${params_string}`);
@@ -192,8 +199,38 @@ export function useNodePageData(input: Accessor<NodesPageRequest>): Accessor<Nod
       eventSource.close();
     });
   });
-  return result;
+  return [data, isLoading];
 
+}
+
+export interface LoadingScopedCallback<U = void> {
+  (): Promise<U>
+}
+
+export interface IsLoadingObj {
+  (): boolean,
+
+  loadingScoped: <U>(callback: LoadingScopedCallback<U>) => Promise<U>,
+  startTransition: (callback: () => unknown) => Promise<void>,
+  setLoading: Scheduled<boolean[]>,
+}
+
+export function createIsLoading(debounce_time: number = 100): IsLoadingObj {
+  let signal = createSignal<boolean>(false);
+  let setLoading = debounce(signal[1], debounce_time);
+  // let result = signal[0];
+  let result = signal[0] as IsLoadingObj;
+  result.loadingScoped = async (callback) => {
+    setLoading(true);
+    let result = await callback();
+    setLoading(false);
+    return result
+  };
+  result.startTransition = (callback) => {
+    return result.loadingScoped(() => startTransition(callback))
+  };
+  result.setLoading = setLoading;
+  return result;
 }
 
 
@@ -212,7 +249,7 @@ export function Traces() {
   // let [showAppFilter, setShowAppFilter] = createSignal<boolean>(true);
   // let [showEvent, setShowEvent] = createSignal<boolean>(true);
   let [curSearch, setCurSearch] = createSignal<string>();
-  let nodesPage = useNodePageData(() => ({
+  let [nodesPage, isLoadingNodes] = useNodePageData(() => ({
     app_build_ids: tracingTreeFilter.selectedAppIds?.map(n => [n, null])
   }));
   let nodeSelection = createMultiSelection(() => tracingTreeFilter.selectedNodeIds, (value: string[]) => {
@@ -236,43 +273,80 @@ export function Traces() {
     return bounds.height;
   });
 
+  createEffect(() => {
+    if (nodesPage == null || (nodesPage.nodes?.length ?? 0) == 0) {
+      return;
+    }
+    let selectedNodes = nodeSelection.selected();
+    let validSelectedNodes = selectedNodes.filter(n => nodesPage.nodes.map(n => n.nodeId).includes(n));
+    if (selectedNodes.length != validSelectedNodes.length) {
+      nodeSelection.setSelected(validSelectedNodes);
+    }
+  });
+
+  let nodesContainerElement: HTMLElement;
+
+  let [nodeSearch, _setNodeSearch] = createSignal('');
+  let setNodeSearch = debounce(_setNodeSearch, 300);
   return (
-    <Show when={nodesPage()}>
+    <Show when={nodesPage}>
       <SelectedTreeItemProvider>
         <div class="flex flex-col gap-3 overflow-hidden flex-grow">
           <div class="panel flex flex-col p-2 gap-2  flex-grow-0">
-            <div class="flex flex-row border-b pb-2">
-              <input placeholder={"search"} type="text"/>
-              <For each={nodesPage().apps}>
-                {n => <div
-                  class={"flex gap-1 items-center hover:bg-stone-100 cursor-pointer rounded px-2 py-1 -my-1"}
-                  onClick={() => appSelection.toggle(n.id)}>
-                  <Checkbox onClick={(e) => {
-                    appSelection.toggleSingle(n.id);
-                    e.preventDefault();
-                    e.stopPropagation();
-                  }} checked={appSelection.isSelect(n.id)}/>
-                  <div class="text-sm">{n.name} ( {n.nodeCount} )</div>
-                </div>}
-              </For>
-              <div class={`flex-grow`}/>
-              {/*<div>{nodesPage().nodes.filter(n => n.stopTime == null).length}/{nodesPage().nodes?.length}</div>*/}
-              <div>{nodesPage().nodes?.length}</div>
+            <div class="flex flex-row border-b pb-2 gap-2 justify-between">
+              <div class={"flex flex-row flex-1"}>
+                <For each={nodesPage.apps}>
+                  {n => <div
+                    class={"flex gap-1 text-nowrap items-center hover:bg-stone-100 cursor-pointer rounded px-2 py-1 -my-1"}
+                    onClick={() => {
+                      appSelection.toggle(n.id);
+                    }}>
+                    <Checkbox onClick={async (e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      appSelection.toggle(n.id);
+                    }} checked={appSelection.isSelect(n.id)}/>
+                    <div class="text-sm">{n.name} ( {n.nodeCount} )</div>
+                  </div>}
+                </For>
+              </div>
+              <input onChange={n => setNodeSearch(n.target.value)} placeholder={"Search"}
+                     class={"p-2 px-3 border-x -m-2 outline-none text-sm"}/>
+              {/*<div>{nodesPage.nodes.filter(n => n.stopTime == null).length}/{nodesPage.nodes?.length}</div>*/}
+              <div class={"flex flex-1"}>
+                <div class={"flex-grow"}></div>
+                <div>{nodesPage.nodes?.length}</div>
+              </div>
             </div>
-            <div class="flex gap-2">
-              <For each={nodesPage().nodes}>
-                {(n) => <NodeItem now={nodesPage().date} data={n}
-                                  isSelected={nodeSelection.isSelect(n.nodeId)}
-                                  onClick={() => nodeSelection.toggle(n.nodeId)}/>}
-              </For>
+            <div class="flex gap-2 overflow-x-auto small-scrollbar" classList={{'justify-center': isLoadingNodes(),'-mb-2':nodesPage?.nodes?.length>0 &&(nodeSearch()||true)&& nodesContainerElement?.offsetWidth<nodesContainerElement?.scrollWidth}} ref={nodesContainerElement}>
+              <Show when={!isLoadingNodes()} fallback={<Loading class={"self-center"}
+                                                                style={{height: nodesContainerElement ? `${nodesContainerElement.offsetHeight}px` : 'auto'}}/>}>
+                <For each={nodesPage.nodes?.filter(n => {
+                  let value = (nodeSearch() ?? "").trim().toLowerCase();
+                  if (value == "") {
+                    return true;
+                  }
+                  return n.nodeId?.toLowerCase().includes(value)
+                    || n.appRunId?.toLowerCase().includes(value)
+                    || n.appBuildIds?.some(n => n?.some(n => n?.toLowerCase().includes(value)))
+                    || Object.keys(n.data ?? {}).some(key => {
+                      return n.data[key]?.toString()?.toLowerCase().includes(value);
+                    })
+                })} fallback={<div class={"flex justify-center items-center text-center flex-grow"}
+                                   style={{height: nodesContainerElement ? `${nodesContainerElement.offsetHeight}px` : 'auto'}}>空</div>}>
+                  {(n) => <NodeItem now={nodesPage.date} class={"box-border"} data={n}
+                                    isSelected={nodeSelection.isSelect(n.nodeId)}
+                                    onClick={() => nodeSelection.toggle(n.nodeId)}/>}
+                </For>
+              </Show>
             </div>
           </div>
           <div class="flex flex-grow gap-3 overflow-hidden">
             <TraceTreeInfoProvider rootContainerElement={rootContainerElement}
                                    search={curSearch}
-                                   date={nodesPage().date}
+                                   date={nodesPage.date}
                                    filter={tracingTreeFilter}>
-              <div ref={setLeftElement} class="flex flex-col flex-grow flex-grow gap-3 overflow-hidden">
+              <div ref={setLeftElement} class="flex flex-col flex-grow gap-3 overflow-hidden">
                 {/*<div class="panel p-2 flex flex-row">*/}
                 {/*  <div>span 路径</div>*/}
                 {/*  <div>span fields</div>*/}
@@ -937,11 +1011,24 @@ function TracingSpanFieldList(all_props: {
   )
 }
 
+
+function ellipseStr(value: string): string {
+  if (value.length > 1024 * 8) {
+    return value.slice(0, 1024 * 8) + "< too long ! >..."
+  } else {
+    return value
+  }
+}
+
+function handlePropValue(value: any): string {
+  return (typeof value) == 'string' ? ellipseStr(value) : ellipseStr(JSON.stringify(value, null, 2)) ?? "NULL"
+}
+
 function TracingFields(allProps: { object: object }) {
   return (
     <For each={Object.keys(allProps.object ?? {})}>
       {key => <PropertyRow
-        label={key}>{(typeof allProps.object[key]) == 'string' ? allProps.object[key] : JSON.stringify(allProps.object[key], null, 2) ?? "NULL"}</PropertyRow>}
+        label={key}>{handlePropValue(allProps.object[key])}</PropertyRow>}
     </For>
   )
 }
@@ -1270,12 +1357,11 @@ function TracingTreeItem(all_props: {
   let needFixed = () => false;
   let hasChildren = props.data.record.kind == TracingKind.AppStart || (props.data.record.spanTId != null && props.data.record.kind == TracingKind.SpanCreate);
   let itemHeight = 32;
-  let fixGap = 4;
+  let fixGap = 2;
   let traceTreeInfo = useContext(CurTraceTreeInfo);
-  let rootContainerBounds;
+  let rootContainerBounds = createElementBounds(traceTreeInfo.rootContainerElement());
 
   if (hasChildren) {
-    rootContainerBounds = createElementBounds(traceTreeInfo.rootContainerElement());
     let targetBounds = createElementBounds(target);
     let date = Date.now();
     needFixed = createMemo((prevValue) => {
@@ -1346,7 +1432,7 @@ function TracingTreeItem(all_props: {
   return (
     <div ref={setTarget}>
       <TracingTreeItemBase ref={setItemTarget} data={props.data} onDblClick={() => expand()}
-                           style={typed_span_name() == null ? {height: `${itemHeight}px`} : {}}
+                           style={{'max-width': rootContainerBounds ? `${rootContainerBounds.width}px` : 'initial', ...(typed_span_name() == null ? {height: `${itemHeight}px`} : {})}}
                            onClick={/*getFlags(props.data.record, EMPTY_CHILDREN) ? null : */(e) => {
                              if (!e.altKey) {
                                return;
@@ -1387,9 +1473,12 @@ function TracingTreeItem(all_props: {
             })
               .filter((n: [string, any]) => (typeof n[1]) != 'object' && !n[0].startsWith("__data"))
               .map(n => {
-                return [n[0], n[1]?.toString().trim()];
+                let value = n[1]?.toString().trim();
+                if (value.length > 80) {
+                  value = "...";
+                }
+                return [n[0], value];
               })
-              .filter(n => n[1].length < 80)
             }>
             {([name, value]) => <div
               class=" bg-stone-100 shadow-sm flex-shrink-0 border flex rounded-sm overflow-hidden text-xsm leading-none text-nowrap select-none">

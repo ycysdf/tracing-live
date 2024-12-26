@@ -23,6 +23,9 @@ importers:
       '@solid-primitives/list':
         specifier: ^0.0.101
         version: 0.0.101(solid-js@1.9.3)
+      '@solid-primitives/scheduled':
+        specifier: ^1.4.4
+        version: 1.4.4(solid-js@1.9.3)
       '@solid-primitives/storage':
         specifier: ^4.2.1
         version: 4.2.1(solid-js@1.9.3)
@@ -68,9 +71,6 @@ importers:
       tailwindcss-animate:
         specifier: ^1.0.7
         version: 1.0.7(tailwindcss@3.4.16)
-      virtua:
-        specifier: ^0.39.2
-        version: 0.39.2(solid-js@1.9.3)
     devDependencies:
       '@eslint/js':
         specifier: ^9.17.0
@@ -2676,26 +2676,6 @@ packages:
   vary@1.1.2:
     resolution: {integrity: sha512-BNGbWLfd0eUPabhkXUVm0j8uuvREyTh5ovRa/dyow/BqAbZJyC+5fU+IzQOzmAKzYqYRAISoRhdQr3eIZ/PXqg==}
     engines: {node: '>= 0.8'}
-
-  virtua@0.39.2:
-    resolution: {integrity: sha512-KhDYmfDe36L1W5ir1b5+jeV40+u4bb5bRiZggWwGinreGXKnxxcLGdk+yVZlO5dNdBq/nxj4v4w6yxuwgLXSBg==}
-    peerDependencies:
-      react: '>=16.14.0'
-      react-dom: '>=16.14.0'
-      solid-js: '>=1.0'
-      svelte: '>=5.0'
-      vue: '>=3.2'
-    peerDependenciesMeta:
-      react:
-        optional: true
-      react-dom:
-        optional: true
-      solid-js:
-        optional: true
-      svelte:
-        optional: true
-      vue:
-        optional: true
 
   vite-plugin-solid@2.11.0:
     resolution: {integrity: sha512-G+NiwDj4EAeUE0wt3Ur9f+Lt9oMUuLd0FIxYuqwJSqRacKQRteCwUFzNy8zMEt88xWokngQhiFjfJMhjc1fDXw==}
@@ -5439,10 +5419,6 @@ snapshots:
   validate-html-nesting@1.2.2: {}
 
   vary@1.1.2: {}
-
-  virtua@0.39.2(solid-js@1.9.3):
-    optionalDependencies:
-      solid-js: 1.9.3
 
   vite-plugin-solid@2.11.0(solid-js@1.9.3)(vite@5.4.11(@types/node@22.10.2)):
     dependencies:

@@ -4,7 +4,7 @@ import {cn} from "~/lib/utils";
 
 export const Loading: Component<JSX.HTMLAttributes<HTMLDivElement>> = allProps => {
   return (
-    <div {...allProps} class={cn("flex flex-col items-center gap-3 p-4", allProps.class)}>
+    <div {...allProps} class={cn("flex flex-col items-center gap-3 p-3", allProps.class)}>
       <div class={`${styles['la-line-scale']} ${styles['la-1x']} text-primary`}>
         <div/>
         <div/>

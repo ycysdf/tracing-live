@@ -112,6 +112,9 @@ export function useRecordsTreeLive(options: {
       }
       setStore(produce(n => {
         n.records.unshift(...olderData);
+        // if (n.records.length> count*2) {
+        //   n.records.slice(0, count*2);
+        // }
         n.more_loading = false;
       }))
     }

@@ -134,7 +134,11 @@ body {
 }
 
 ::-webkit-scrollbar {
-  width: 16px;
+  width: 14px;
+}
+
+.small-scrollbar::-webkit-scrollbar {
+  height: 11px;
 }
 
 ::-webkit-scrollbar-thumb {

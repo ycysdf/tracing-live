@@ -31,12 +31,6 @@ export interface TracingTreeEndDto {
      * @memberof TracingTreeEndDto
      */
     exceptionEnd?: Date | null;
-    /**
-     * 
-     * @type {number}
-     * @memberof TracingTreeEndDto
-     */
-    runElapsed?: number | null;
 }
 
 /**
@@ -59,7 +53,6 @@ export function TracingTreeEndDtoFromJSONTyped(json: any, ignoreDiscriminator: b
         
         'endDate': (new Date(json['end_date'])),
         'exceptionEnd': json['exception_end'] == null ? undefined : (new Date(json['exception_end'])),
-        'runElapsed': json['run_elapsed'] == null ? undefined : json['run_elapsed'],
     };
 }
 
@@ -76,7 +69,6 @@ export function TracingTreeEndDtoFromJSONTyped(json: any, ignoreDiscriminator: b
         
         'end_date': ((value['endDate']).toISOString()),
         'exception_end': value['exceptionEnd'] == null ? undefined : ((value['exceptionEnd'] as any).toISOString()),
-        'run_elapsed': value['runElapsed'],
     };
 }
 
