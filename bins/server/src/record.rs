@@ -3,7 +3,7 @@ use crate::grpc_service::{
     RunningSpan, SpanFullInfo, SpanInfo, TracingFields, TracingServiceImpl, FIELD_DATA_SPAN_T_ID,
 };
 use crate::tracing_service::{
-    BigSerialId, TracingLevel, TracingRecordDto, TracingRecordFieldFilter, TracingRecordFilter,
+    BigInt, TracingLevel, TracingRecordDto, TracingRecordFieldFilter, TracingRecordFilter,
     TracingRecordScene, TracingTreeRecordDto,
 };
 use chrono::{DateTime, Local, Utc};
@@ -117,7 +117,7 @@ pub enum TracingRecordVariant {
 
 impl TracingRecordVariant {
     #[inline(always)]
-    pub fn get_dto(&self, record_id: BigSerialId) -> TracingRecordDto {
+    pub fn get_dto(&self, record_id: BigInt) -> TracingRecordDto {
         TracingRecordDto {
             id: record_id,
             app_id: self.app_info().id,
@@ -150,7 +150,7 @@ impl TracingRecordVariant {
     }
 
     #[inline(always)]
-    pub fn into_dto(mut self, record_id: BigSerialId) -> TracingRecordDto {
+    pub fn into_dto(mut self, record_id: BigInt) -> TracingRecordDto {
         TracingRecordDto {
             id: record_id,
             app_id: self.app_info().id,
@@ -247,7 +247,7 @@ impl TracingRecordVariant {
         }
         if let Some(span_t_id) = &filter.parent_span_t_id {
             if let Some(parent_id) = self.parent_span_t_id().as_ref() {
-                if *parent_id != (*span_t_id as u64) {
+                if *parent_id != *span_t_id {
                     return false;
                 }
             } else {

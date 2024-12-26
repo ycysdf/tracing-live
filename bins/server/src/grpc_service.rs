@@ -1,7 +1,7 @@
 use crate::global_data::GLOBAL_DATA;
 use crate::record::{AppRunInfo, SpanCacheId, SpanId, TracingKind, TracingRecordVariant};
 use crate::running_app::RunMsg;
-use crate::tracing_service::{BigSerialId, TracingLevel, TracingRecordBatchInserter};
+use crate::tracing_service::{BigInt, TracingLevel, TracingRecordBatchInserter};
 use bitflags::bitflags;
 use bon::bon;
 use chrono::{DateTime, FixedOffset, Local, Utc};

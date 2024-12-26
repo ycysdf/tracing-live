@@ -45,7 +45,7 @@ use tracing_subscriber::filter::FilterExt;
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
-pub type BigSerialId = i64;
+pub type BigInt = i64;
 
 const INSERT_STR: &'static str = r#"
 insert into tracing_record(id,app_id, app_version, app_run_id, node_id, name, record_time, kind, level, span_id, parent_span_t_id, parent_id, fields, target, module_path, position_info)
@@ -72,7 +72,7 @@ impl TracingRecordBatchInserter {
 
 impl TracingRecordBatchInserter {
     pub const BIND_COL_COUNT: usize = 8;
-    pub async fn execute(&mut self, dc: &DatabaseConnection) -> Result<Range<BigSerialId>, Error> {
+    pub async fn execute(&mut self, dc: &DatabaseConnection) -> Result<Range<BigInt>, Error> {
         if self.placeholder_num == 0 {
             return Ok(0..0);
         }
@@ -106,7 +106,7 @@ impl TracingRecordBatchInserter {
         kind: &str,
         level: Option<Level>,
         span_id: Option<SpanId>,
-        parent_span_t_id: Option<BigSerialId>,
+        parent_span_t_id: Option<BigInt>,
         parent: Option<SpanId>,
         fields: Option<&serde_json::Value>,
         target: Option<&str>,
@@ -248,7 +248,7 @@ pub struct AppLatestInfoDto {
 }
 #[derive(Serialize, Clone, Debug, ToSchema)]
 pub struct TracingRecordDto {
-    pub id: BigSerialId,
+    pub id: BigInt,
     pub app_id: Uuid,
     #[schema(value_type = String)]
     pub app_version: SmolStr,
@@ -458,7 +458,7 @@ impl From<&TracingTreeRecordVariantDto> for Option<TracingTreeEndDto> {
 
 #[derive(Default, Clone, Debug, Deserialize, IntoParams, ToSchema)]
 pub struct CursorInfo {
-    pub id: BigSerialId,
+    pub id: BigInt,
     pub is_before: bool,
 }
 #[derive(Clone, Debug, Deserialize, ToSchema)]
@@ -478,7 +478,7 @@ pub struct TracingRecordFilter {
     pub app_run_ids: Option<SmallVec<[Uuid; 2]>>,
     pub node_ids: Option<SmallVec<[String; 2]>>,
     pub parent_id: Option<Uuid>,
-    pub parent_span_t_id: Option<BigSerialId>,
+    pub parent_span_t_id: Option<u64>,
     pub start_time: Option<DateTime<FixedOffset>>,
     pub end_time: Option<DateTime<FixedOffset>>,
     pub kinds: Option<SmallVec<[TracingKind; 2]>>,
@@ -509,7 +509,7 @@ impl TracingRecordFieldFilter {
 #[derive(Default, Clone, Debug, Deserialize, IntoParams, ToSchema)]
 pub struct AppNodeFilter {
     pub main_app_id: Option<Uuid>,
-    pub after_record_id: Option<BigSerialId>,
+    pub after_record_id: Option<BigInt>,
     pub app_build_ids: Option<SmallVec<[(Uuid, Option<String>); 2]>>,
 }
 
@@ -522,8 +522,8 @@ pub struct AppRunDto {
     #[schema(value_type = Object)]
     pub data: Arc<serde_json::Map<String, serde_json::Value>>,
     pub creation_time: DateTime<FixedOffset>,
-    pub record_id: BigSerialId,
-    pub stop_record_id: Option<BigSerialId>,
+    pub record_id: BigInt,
+    pub stop_record_id: Option<BigInt>,
     pub start_time: DateTime<FixedOffset>,
     pub stop_time: Option<DateTime<FixedOffset>>,
     pub exception_end: bool,
@@ -569,8 +569,8 @@ pub struct AppNodeRunDto {
     #[schema(value_type = Object)]
     pub data: Arc<serde_json::Map<String, serde_json::Value>>,
     pub creation_time: DateTime<FixedOffset>,
-    pub record_id: BigSerialId,
-    pub stop_record_id: Option<BigSerialId>,
+    pub record_id: BigInt,
+    pub stop_record_id: Option<BigInt>,
     pub start_time: DateTime<FixedOffset>,
     pub stop_time: Option<DateTime<FixedOffset>>,
     pub exception_end: bool,
@@ -713,7 +713,7 @@ impl TracingService {
 
     pub async fn list_records_app_run_infos(
         &self,
-        record_ids: impl IntoIterator<Item = BigSerialId>,
+        record_ids: impl IntoIterator<Item =BigInt>,
     ) -> Result<impl Iterator<Item = AppRunDto>, DbErr> {
         use app_run::*;
         Ok(Entity::find()
@@ -725,7 +725,7 @@ impl TracingService {
     }
     pub async fn list_records_span_run_infos(
         &self,
-        span_start_record_ids: impl IntoIterator<Item = BigSerialId>,
+        span_start_record_ids: impl IntoIterator<Item =BigInt>,
     ) -> Result<impl Iterator<Item = TracingSpanRunDto>, DbErr> {
         use tracing_span_run::*;
         Ok(Entity::find()
@@ -737,7 +737,7 @@ impl TracingService {
     }
     pub async fn list_records_span_enter_infos(
         &self,
-        span_start_record_ids: impl IntoIterator<Item = BigSerialId>,
+        span_start_record_ids: impl IntoIterator<Item =BigInt>,
     ) -> Result<impl Iterator<Item = TracingSpanEnterDto>, DbErr> {
         use tracing_span_enter::*;
         Ok(Entity::find()
@@ -831,7 +831,7 @@ impl TracingService {
                 .collect(),
         })
     }
-    pub async fn query_last_record_id(&self) -> Result<Option<BigSerialId>, DbErr> {
+    pub async fn query_last_record_id(&self) -> Result<Option<BigInt>, DbErr> {
         use tracing_record::*;
         let option = Entity::find()
             .order_by_desc(Column::Id)
@@ -856,7 +856,7 @@ impl TracingService {
                 })
             })
             .apply_if(filter.parent_span_t_id, |n, span_t_id| {
-                n.filter(Column::ParentSpanTId.eq(span_t_id))
+                n.filter(Column::ParentSpanTId.eq(i64::from_le_bytes(span_t_id.to_le_bytes())))
             })
             .apply_if(filter.start_time, |n, start_time| {
                 n.filter(Column::RecordTime.gt(start_time))
@@ -986,7 +986,6 @@ impl TracingService {
                         fields
                             .remove(FIELD_DATA_REPEATED_COUNT)
                             .map(|n| {
-                                println!("span_t_id value: {:#?}", n);
                                 n.as_u64().map(|n| n as u32)
                             })
                             .flatten(),
@@ -1017,7 +1016,9 @@ impl TracingService {
                 span_id_is_stable: Some(span_id_is_stable),
                 parent_id: n.parent_id,
                 span_t_id,
-                parent_span_t_id: n.parent_span_t_id.map(|n| n.to_smolstr()),
+                parent_span_t_id: n.parent_span_t_id.map(|n| {
+                    u64::from_le_bytes(n.to_le_bytes()).to_smolstr()
+                }),
                 repeated_count,
             }
         }))
@@ -1215,7 +1216,7 @@ impl TracingService {
         run_id: Uuid,
         span_id: Uuid,
         run_time: DateTime<FixedOffset>,
-        record_id: BigSerialId,
+        record_id: BigInt,
     ) -> Result<Uuid, DbErr> {
         use tracing_span_run::*;
         let result = Entity::insert(ActiveModel {
@@ -1235,7 +1236,7 @@ impl TracingService {
         id: Uuid,
         busy_duration: Duration,
         idle_duration: Duration,
-        close_record_id: BigSerialId,
+        close_record_id: BigInt,
     ) -> Result<TracingSpanRunDto, DbErr> {
         use tracing_span_run::*;
         let model = Entity::update(ActiveModel {
@@ -1288,7 +1289,7 @@ impl TracingService {
         &self,
         span_run_id: Uuid,
         enter_time: DateTime<FixedOffset>,
-        record_id: BigSerialId,
+        record_id: BigInt,
     ) -> Result<Uuid, DbErr> {
         use tracing_span_enter::*;
         Ok(Entity::insert(ActiveModel {
@@ -1306,7 +1307,7 @@ impl TracingService {
         &self,
         id: Uuid,
         duration: Duration,
-        leave_record_id: BigSerialId,
+        leave_record_id: BigInt,
     ) -> Result<(), DbErr> {
         use tracing_span_enter::*;
         Entity::update(ActiveModel {
@@ -1396,7 +1397,7 @@ impl TracingService {
         app_info: Arc<AppRunInfo>,
         data: serde_json::Value,
         start_time: DateTime<FixedOffset>,
-        record_id: BigSerialId,
+        record_id: BigInt,
     ) -> Result<AppRunDto, DbErr> {
         use app_run::*;
         let model = Entity::insert(ActiveModel {
@@ -1417,7 +1418,7 @@ impl TracingService {
         &self,
         id: Uuid,
         stop_time: DateTime<FixedOffset>,
-        stop_record_id: BigSerialId,
+        stop_record_id: BigInt,
         exception_end: Option<bool>,
     ) -> Result<AppRunDto, DbErr> {
         use app_run::*;
@@ -1468,7 +1469,7 @@ impl TracingService {
 
     pub async fn incremental_repeated_event(
         &self,
-        id: BigSerialId,
+        id: BigInt,
         record_time: DateTime<FixedOffset>,
     ) -> Result<(), DbErr> {
         use tracing_record::*;
@@ -1500,6 +1501,13 @@ impl TracingService {
         Ok(())
     }
 
+    // pub async fn list_repeated_events(&self, repeated_record_id: BigSerialId) ->Result<(),DbErr> {
+    //      use tracing_record::*;
+    //     Entity::find()
+    //        .filter(Column::Id == repeated_record_id)
+    //     Ok(())
+    // }
+
     pub async fn insert_record(
         &self,
         name: String,
@@ -1513,7 +1521,7 @@ impl TracingService {
         module_path: Option<String>,
         position_info: Option<String>,
         app_info: Arc<AppRunInfo>,
-    ) -> Result<BigSerialId, DbErr> {
+    ) -> Result<BigInt, DbErr> {
         use tracing_record::*;
 
         Ok(Entity::insert(ActiveModel {

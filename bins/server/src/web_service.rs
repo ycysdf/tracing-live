@@ -2,9 +2,9 @@ use crate::record::TracingKind;
 use crate::running_app::RunMsg;
 use crate::tracing_service::TracingTreeRecordDto;
 use crate::tracing_service::{
-    AppLatestInfoDto, AppNodeFilter, AppNodeRunDto, AppRunDto, BigSerialId, CursorInfo,
-    TracingRecordDto, TracingRecordFieldFilter, TracingRecordFilter, TracingService,
-    TracingSpanRunDto,
+   AppLatestInfoDto, AppNodeFilter, AppNodeRunDto, AppRunDto, BigInt, CursorInfo,
+   TracingRecordDto, TracingRecordFieldFilter, TracingRecordFilter, TracingService,
+   TracingSpanRunDto,
 };
 use crate::web_error::AppError;
 use axum::extract::rejection::QueryRejection;
@@ -293,7 +293,7 @@ mod apps {
 
 #[derive(Default, Clone, Debug, Deserialize, IntoParams, ToSchema)]
 pub struct NodesPageInput {
-    after_record_id: Option<BigSerialId>,
+    after_record_id: Option<BigInt>,
     app_build_ids: Option<SmallVec<[(Uuid, Option<String>); 2]>>,
 }
 
@@ -308,7 +308,8 @@ mod nodes {
     use chrono::{DateTime, FixedOffset, Local};
     use serde::Serialize;
     use std::iter::Iterator;
-    use utoipa::ToSchema;
+   use std::time::Duration;
+   use utoipa::ToSchema;
     use utoipa_axum::router::OpenApiRouter;
     use utoipa_axum::routes;
 

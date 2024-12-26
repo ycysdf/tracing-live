@@ -3,7 +3,7 @@ use tracing::error;
 
 use crate::record::TracingRecordVariant;
 use crate::tracing_service::{
-    BigSerialId, TracingRecordFilter, TracingSpanRunDto, TracingTreeRecordVariantDto,
+   BigInt, TracingRecordFilter, TracingSpanRunDto, TracingTreeRecordVariantDto,
 };
 use crate::tracing_service::{TracingRecordDto, TracingTreeRecordDto};
 
@@ -25,10 +25,10 @@ impl EventService {
     }
     #[inline]
     pub async fn notify(
-        &mut self,
-        item: TracingRecordVariant,
-        record_id: BigSerialId,
-        variant_dto: Option<TracingTreeRecordVariantDto>,
+       &mut self,
+       item: TracingRecordVariant,
+       record_id: BigInt,
+       variant_dto: Option<TracingTreeRecordVariantDto>,
     ) {
         for x in self.record_event_senders.iter_mut() {
             x.2 = item.filter(&x.1)

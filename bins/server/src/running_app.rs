@@ -6,7 +6,7 @@ use crate::grpc_service::{
 };
 use crate::record::{AppRunInfo, SpanId, TracingRecordVariant};
 use crate::tracing_service::{
-    AppRunDto, BigSerialId, TracingRecordBatchInserter, TracingRecordDto, TracingRecordFilter,
+    AppRunDto, BigInt, TracingRecordBatchInserter, TracingRecordDto, TracingRecordFilter,
     TracingSpanEnterDto, TracingSpanRunDto, TracingTreeRecordDto, TracingTreeRecordVariantDto,
 };
 use anyhow::{anyhow, Context};
@@ -34,11 +34,11 @@ use tracing::{error, info, warn};
 use tracing_lv_proto::FieldValue;
 use uuid::Uuid;
 
-const UN_SET_RECORD_ID: BigSerialId = -1;
+const UN_SET_RECORD_ID: BigInt = -1;
 struct EnteredSpan {
     id: Uuid,
     record_time: DateTime<Utc>,
-    record_id: BigSerialId,
+    record_id: BigInt,
 }
 
 #[derive(Deref)]
@@ -49,16 +49,16 @@ struct CreatedSpan {
     parent_span_t_id: Option<u64>,
     total_enter_duration: Duration,
     enter_span: Option<EnteredSpan>,
-    record_id: BigSerialId,
-    last_record_filed_id: Option<(BigSerialId, TracingFields)>,
-    last_repeated_event: Option<(BigSerialId, SmolStr, usize)>,
+    record_id: BigInt,
+    last_record_filed_id: Option<(BigInt, TracingFields)>,
+    last_repeated_event: Option<(BigInt, SmolStr, usize)>,
     sub_span_t_ids: SmallVec<[(u64, Uuid, bool); 8]>,
 }
 
 struct RunningApp {
     app_info: Arc<AppRunInfo>,
     created_spans: hashbrown::HashMap<u64, CreatedSpan>,
-    last_repeated_event: Option<(BigSerialId, SmolStr, usize)>,
+    last_repeated_event: Option<(BigInt, SmolStr, usize)>,
 }
 
 impl RunningApp {
@@ -161,7 +161,7 @@ pub struct RunningApps {
     buf_records: VecDeque<TracingRecordVariant>,
     dto_buf: Vec<(
         TracingRecordVariant,
-        BigSerialId,
+        BigInt,
         Option<TracingTreeRecordVariantDto>,
     )>,
     cur_record_field_count: usize,
@@ -193,7 +193,7 @@ const POSTGRESQL_MAX_BIND_PARAM_COUNT: usize = 32767;
 impl RunningApps {
     pub fn new(
         tracing_service: crate::tracing_service::TracingService,
-        id: BigSerialId,
+        id: BigInt,
         max_buf_count: Option<usize>,
     ) -> Self {
         let max_buf_count_max_value =
@@ -431,7 +431,7 @@ impl RunningApps {
                             kind.as_str(),
                             level.map(|n| n.into()),
                             span_id,
-                            parent_span_t_id.map(|n| n as _),
+                            parent_span_t_id.map(|n| i64::from_le_bytes(n.to_le_bytes())),
                             parent_id,
                             json_fields.as_ref(),
                             target.map(|n| n.as_str()),
@@ -804,7 +804,7 @@ impl RunningApps {
     ) -> Result<
         (
             TracingRecordVariant,
-            BigSerialId,
+            BigInt,
             Option<TracingTreeRecordVariantDto>,
         ),
         std::fmt::Error,
