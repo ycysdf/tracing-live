@@ -500,11 +500,15 @@ impl AppRunLifetime {
 
     async fn app_stop(mut self, normal_stop: Option<DateTime<Utc>>) -> Result<(), Status> {
         let exception_end = normal_stop.is_none();
-        let record_time = normal_stop.clone().unwrap_or_else(||GLOBAL_DATA.get_node_now_timestamp_nanos(self.app_run_info.run_id)
-           .map(DateTime::from_timestamp_nanos).unwrap_or_else(|| {
-            warn!("not found global app_running");
-            Utc::now()
-        }));
+        let record_time = normal_stop.clone().unwrap_or_else(|| {
+            GLOBAL_DATA
+                .get_node_now_timestamp_nanos(self.app_run_info.run_id)
+                .map(DateTime::from_timestamp_nanos)
+                .unwrap_or_else(|| {
+                    warn!("not found global app_running");
+                    Utc::now()
+                })
+        });
 
         let running_spans = self.running_spans.clone();
 
@@ -552,7 +556,7 @@ impl AppRunLifetime {
                     error!("failed to close span {err:?}");
                 }
             }
-            Ok::<(),Status>(())
+            Ok::<(), Status>(())
         }
         .await
         .inspect_err(|err| {
@@ -639,12 +643,11 @@ impl TracingService for TracingServiceImpl {
             async move {
                 let mut normal_stop = None;
                 let result = async {
+                    let mut error_count = 0;
                     while let Some(result) = streaming.next().await {
                         match result {
-                            Ok(RecordParam {
-                                send_time,
-                                variant,
-                            }) => {
+                            Ok(RecordParam { send_time, variant }) => {
+                                error_count = 0;
                                 let variant = variant.unwrap();
                                 // if !matches!(variant, record_param::Variant::Event(_)) {
                                 //     app_run_lifetime.last_repeated_event = None;
@@ -683,7 +686,11 @@ impl TracingService for TracingServiceImpl {
                                 }
                             }
                             Err(err) => {
-                                warn!("{err:?}");
+                                error_count += 1;
+                                warn!(error_count, "{err:?}");
+                                if error_count > 3 {
+                                    return Err(err);
+                                }
                             }
                         }
                     }
@@ -696,7 +703,7 @@ impl TracingService for TracingServiceImpl {
                 if normal_stop.is_none() {
                     warn!(run_info=?app_run_lifetime.app_run_info,"app exception_end");
                 }
-                let run_id =app_run_lifetime.app_run_info.run_id;
+                let run_id = app_run_lifetime.app_run_info.run_id;
                 app_run_lifetime
                     .app_stop(normal_stop.map(DateTime::from_timestamp_nanos))
                     .await
