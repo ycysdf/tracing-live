@@ -50,6 +50,8 @@ import {Key} from "@solid-primitives/keyed";
 import {VirtualList} from "@solid-primitives/virtual";
 import {Index} from 'solid-js';
 import {debounce, Scheduled} from "@solid-primitives/scheduled";
+import {AppEmpty} from "~/components/Empty";
+import {t} from "i18next";
 
 const CurSelectedTreeItem = createContext<Signal<TracingTreeRecordDto>>();
 
@@ -310,7 +312,7 @@ export function Traces() {
                   </div>}
                 </For>
               </div>
-              <input onChange={n => setNodeSearch(n.target.value)} placeholder={"Search"}
+              <input onChange={n => setNodeSearch(n.target.value)} placeholder={t("common:search")}
                      class={"p-2 px-3 border-x -m-2 outline-none text-sm"}/>
               {/*<div>{nodesPage.nodes.filter(n => n.stopTime == null).length}/{nodesPage.nodes?.length}</div>*/}
               <div class={"flex flex-1"}>
@@ -318,7 +320,10 @@ export function Traces() {
                 <div>{nodesPage.nodes?.length}</div>
               </div>
             </div>
-            <div class="flex gap-2 overflow-x-auto small-scrollbar" classList={{'justify-center': isLoadingNodes(),'-mb-2':nodesPage?.nodes?.length>0 &&(nodeSearch()||true)&& nodesContainerElement?.offsetWidth<nodesContainerElement?.scrollWidth}} ref={nodesContainerElement}>
+            <div class="flex gap-2 overflow-x-auto small-scrollbar" classList={{
+              'justify-center': isLoadingNodes(),
+              '-mb-2': nodesPage?.nodes?.length > 0 && (nodeSearch() || true) && nodesContainerElement?.offsetWidth < nodesContainerElement?.scrollWidth
+            }} ref={nodesContainerElement}>
               <Show when={!isLoadingNodes()} fallback={<Loading class={"self-center"}
                                                                 style={{height: nodesContainerElement ? `${nodesContainerElement.offsetHeight}px` : 'auto'}}/>}>
                 <For each={nodesPage.nodes?.filter(n => {
@@ -353,7 +358,7 @@ export function Traces() {
                 {/*</div>*/}
                 <div class="panel py-3 px-3 flex">
                   <div class="flex flex-grow gap-3 items-center">
-                    <input placeholder={"搜索 (PostgreSql Like 语法)"}
+                    <input placeholder={`${t("common:search")} (PostgreSQL Like Syntax)`}
                            class={"outline-none flex-grow flex-shrink text-sm bg-gray-50 block"}
                            style={{
                              "padding": "8px",
@@ -914,7 +919,7 @@ function TracingSpanEnterList(all_props: {
                         top: rc.scrollHeight - scrollBottom
                       })
                     }}>
-              加载更多
+              {t("common:loadMore")}
             </Button>
           </Show>
           <For each={data().records}>
@@ -992,14 +997,14 @@ function TracingSpanFieldList(all_props: {
                         top: rc.scrollHeight - scrollBottom
                       })
                     }}>
-              加载更多
+              {t("common:loadMore")}
             </Button>
           </Show>
           <For each={data().records}>
-            {item => <PropertyExpandableRow class={"mt-1"} defaultIsExpand={true} label={`Record Fields`}
-                                            tailing={<div class={"text-right text-xsm mr-2"}>
-                                              {item.record.recordTime?.toLocaleString()}
-                                            </div>} childrenContainerContainerClass={"table"}>
+            {item2 => <PropertyExpandableRow class={"mt-1"} defaultIsExpand={true} label={`Record Fields`}
+                                             tailing={<div class={"text-right text-xsm mr-2"}>
+                                               {item.record.recordTime?.toLocaleString()}
+                                             </div>} childrenContainerContainerClass={"table"}>
               <PropertyTable class={""}>
                 <TracingFields object={item.record.fields}></TracingFields>
               </PropertyTable>
@@ -1118,6 +1123,7 @@ function TracingTreeItemList(allProps: {
     //   }
     // })
   }
+  let first = true;
   return (
     <Show when={data() != null}>
       <div {...forwardProps} class={cn("flex flex-col gap-[2px] pt-[2px]", forwardProps.class)} ref={elementRef}>
@@ -1136,7 +1142,7 @@ function TracingTreeItemList(allProps: {
                       top: rc.scrollHeight - scrollBottom
                     })
                   }}>
-            加载更多
+            {t("common:loadMore")}
           </Button>
         </Show>
         {/*<For each={data().records.map((n, i, me) => ({*/}
@@ -1154,11 +1160,15 @@ function TracingTreeItemList(allProps: {
         {/*  </Suspense>}*/}
         {/*</For>*/}
         <Key each={data().records?.map((n, i, me) => {
-          return ({
+          let r = {
             item: n,
-            defaultIsExpand: props.layer == 0 && (me.length - 1) == i
-          })
-        })} by={n => n.item.record.id} fallback={<div class={"items-center justify-center p-2"}>无内容</div>}>
+            defaultIsExpand: props.layer == 0 && (me.length - 1) == i && first
+          };
+          if (r.defaultIsExpand) {
+            first = false;
+          }
+          return r;
+        })} by={n => n.item.record.id} fallback={<AppEmpty/>}>
           {(n) => <TracingTreeItem isAppTable={props.isAppTable} layer={props.layer}
                                    appRunId={props.appRunId}
                                    defaultIsExpand={n().defaultIsExpand}
@@ -1615,7 +1625,7 @@ function TracingRecordTable(all_props: {
       <table {...rootProps}
              class={cn("border-collapse w-full flex flex-col overflow-y-auto border-slate-500", rootProps.class)}>
         <tbody ref={elementRef} class={"w-full"}>
-        <For each={data().records} fallback={<div class={"items-center justify-center p-2"}>无内容</div>}>
+        <For each={data().records} fallback={<AppEmpty/>}>
           {(item) => (
             <TracingRecordTr onClick={() => setSelected(item)}
                              selected={() => selected()?.record.id == item.record.id}

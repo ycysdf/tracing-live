@@ -2,6 +2,19 @@
 import './index.css';
 import {render} from 'solid-js/web';
 import {App} from "./app";
+import i18next from "i18next";
+import resources from "./i18n-resources.json";
+
+i18next.init({
+  ns: ['translation'],
+  defaultNS: 'translation',
+  load: 'all',
+  supportedLngs: ['en', 'zh'],
+  lng: 'en',
+  fallbackLng: 'en',
+  debug: true,
+  resources
+});
 
 const root = document.getElementById('root');
 
