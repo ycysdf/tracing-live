@@ -46,6 +46,19 @@ use tracing_subscriber::layer::Layer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
+use uuid::{uuid, Uuid};
+
+#[instrument]
+fn program_panic_catch() {
+    let prev_hook = std::panic::take_hook();
+    let span = Span::current();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        span.in_scope(|| {
+            tracing_panic::panic_hook(panic_info);
+            prev_hook(panic_info);
+        })
+    }));
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -59,12 +72,7 @@ async fn main() -> anyhow::Result<()> {
         }))
         .with(tracing_subscriber::fmt::layer().pretty())
         .init();
-    let prev_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |panic_info| {
-        println!("panic: {:?}", panic_info);
-        tracing_panic::panic_hook(panic_info);
-        prev_hook(panic_info);
-    }));
+    program_panic_catch();
 
     let web_addr = SocketAddr::from((
         Ipv4Addr::UNSPECIFIED,
