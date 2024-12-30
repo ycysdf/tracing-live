@@ -5,7 +5,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::{Debug, Formatter};
 use std::time::Duration;
 use tracing::{info, info_span, instrument, warn, Instrument, Span};
-use tracing_lv::client::{TLAppInfo, TLSubscriberExt};
+use tracing_lv::TLAppInfo;
+use tracing_lv::TLSubscriberExt;
 use tracing_lv::FLAGS_AUTO_EXPAND;
 
 #[tokio::main]
@@ -45,7 +46,6 @@ where
     }
 }
 async fn app_main() -> anyhow::Result<()> {
-
     info!(
         a = 1,
         b = 2,
@@ -73,8 +73,6 @@ async fn app_main() -> anyhow::Result<()> {
         info!("FIRST EVENT");
         info!("END EVENT");
     });
-
-
 
     test_auto_expand().await;
 
@@ -116,9 +114,7 @@ async fn app_main() -> anyhow::Result<()> {
     let span = { info_span!("DoThingsContainer") };
     test_saved(span).await;
 
-
     info!("{}", "Long Event.".repeat(1024));
-
 
     many_event();
     Ok(())
@@ -195,7 +191,7 @@ async fn test_saved(container: Span) {
 
 #[instrument]
 fn many_event() {
-    for i in 0..1024*2 {
+    for i in 0..1024 * 2 {
         info!("event {}", i);
     }
 }

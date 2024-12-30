@@ -7,7 +7,7 @@ use rand::{thread_rng, Rng};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{error, info, info_span, instrument, warn, Instrument, Span};
-use tracing_lv::client::{TLAppInfo, TLSubscriberExt};
+use tracing_lv::{TLAppInfo, TLSubscriberExt};
 use tracing_lv::{TLAsyncReadExt, TLAsyncWriteExt, TLStreamExt};
 
 #[tokio::main]
