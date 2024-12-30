@@ -57,3 +57,8 @@ bon = "3"
 #utoipa-redoc = { version = "5", features = ["axum"] }
 #utoipa-rapidoc = { version = "5", features = ["axum"] }
 #utoipa-scalar = { version = "0.2", features = ["axum"] }
+
+shadow-rs = "0.37"
+
+[build-dependencies]
+shadow-rs = "0.37"

@@ -51,6 +51,8 @@ pub fn router(tracing_service: TracingService, msg_sender: flume::Sender<RunMsg>
     )))]
     struct ApiDoc;
 
+   let span = Span::current();
+
     let (router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .nest("/api/v1/apps", apps::router(tracing_service.clone()))
         .nest("/api/v1/records", records::router(tracing_service.clone()))
@@ -59,7 +61,7 @@ pub fn router(tracing_service: TracingService, msg_sender: flume::Sender<RunMsg>
             TraceLayer::new_for_http()
                 // Create our own span for the request and include the matched path. The matched
                 // path is useful for figuring out which handler the request was routed to.
-                .make_span_with(|req: &Request| {
+                .make_span_with(move|req: &Request| {
                     let method = req.method();
                     let uri = req.uri();
 
@@ -69,7 +71,7 @@ pub fn router(tracing_service: TracingService, msg_sender: flume::Sender<RunMsg>
                         .get::<MatchedPath>()
                         .map(|matched_path| matched_path.as_str());
 
-                    tracing::info_span!("request", %method, %uri, matched_path)
+                    tracing::info_span!(parent: span.id(),"request", %method, %uri, matched_path)
                 })
                 .on_failure(
                     |_error: ServerErrorsFailureClass, _latency: Duration, _span: &Span| {

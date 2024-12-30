@@ -39,8 +39,8 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::time::FutureExt as _;
-use tracing::{error, info, warn};
-use tracing_lv_proto::{FieldValue, Level};
+use tracing::{error, info, instrument, warn};
+use tracing_lv_proto::proto::{FieldValue, Level};
 use tracing_subscriber::filter::FilterExt;
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
@@ -308,7 +308,8 @@ impl From<tracing_span_run::Model> for TracingSpanRunDto {
                 .map(|node_now| {
                     Duration::from_nanos(
                         (node_now - n.run_time.timestamp_nanos_opt().unwrap()) as u64,
-                    ).as_millis_f64()
+                    )
+                    .as_millis_f64()
                 }),
             run_time: n.run_time,
             busy_duration: n.busy_duration,
@@ -541,7 +542,8 @@ impl From<app_run::Model> for AppRunDto {
                 .map(|node_now| {
                     Duration::from_nanos(
                         (node_now - n.start_time.timestamp_nanos_opt().unwrap()) as u64,
-                    ).as_millis_f64()
+                    )
+                    .as_millis_f64()
                 }),
             data: Arc::new(if let Some(data) = n.data {
                 let serde_json::Value::Object(data) = data else {
@@ -595,6 +597,7 @@ impl TracingService {
         Self { dc }
     }
 
+    #[instrument(skip(self))]
     pub async fn init(&self) -> Result<(), DbErr> {
         if std::env::var("AUTO_INIT_DATABASE")
             .map(|n| n == "true")
@@ -614,26 +617,19 @@ impl TracingService {
             .filter(app_run::Column::StopTime.is_null())
             .all(&self.dc)
             .await?;
-        let records: HashMap<_, _> = tracing_record::Entity::find()
-            .filter(tracing_record::Column::AppRunId.is_in(exception_app_runs.iter().map(|n| n.id)))
-            .distinct_on([tracing_record::Column::AppRunId])
-            .order_by_desc(tracing_record::Column::AppRunId)
-            .order_by_desc(tracing_record::Column::CreationTime)
-            .all(&self.dc)
-            .await?
-            .into_iter()
-            .map(|n| (n.app_id, n.record_time))
-            .collect();
         for app_run in exception_app_runs.iter() {
+            let last_record = tracing_record::Entity::find()
+                .filter(
+                    tracing_record::Column::AppRunId.is_in(exception_app_runs.iter().map(|n| n.id)),
+                )
+                .order_by_desc(tracing_record::Column::CreationTime)
+                .one(&self.dc)
+                .await?
+                .map(|n| n.record_time);
             app_run::Entity::update(app_run::ActiveModel {
                 id: Unchanged(app_run.id),
                 exception_end: Set(Some(true)),
-                stop_time: Set(Some(
-                    records
-                        .get(&app_run.id)
-                        .copied()
-                        .unwrap_or(app_run.start_time),
-                )),
+                stop_time: Set(Some(last_record.unwrap_or(app_run.start_time))),
                 ..Default::default()
             })
             .exec(&self.dc)
@@ -654,11 +650,15 @@ impl TracingService {
                 .map(|n| {
                     n.enter_time
                         + TimeDelta::try_milliseconds(
-                            n.duration.map(|n| n * 1000.).unwrap_or_default() as _
-                        ).unwrap_or_else(|| {
-                        warn!("TimeDelta::try_milliseconds error. duration: {}", n.duration.map(|n| n * 1000.).unwrap_or_default());
-                        Default::default()
-                    })
+                            n.duration.map(|n| n * 1000.).unwrap_or_default() as _,
+                        )
+                        .unwrap_or_else(|| {
+                            warn!(
+                                "TimeDelta::try_milliseconds error. duration: {}",
+                                n.duration.map(|n| n * 1000.).unwrap_or_default()
+                            );
+                            Default::default()
+                        })
                 })
                 .unwrap_or(item.run_time);
             tracing_span_run::Entity::update(tracing_span_run::ActiveModel {
@@ -716,7 +716,7 @@ impl TracingService {
 
     pub async fn list_records_app_run_infos(
         &self,
-        record_ids: impl IntoIterator<Item =BigInt>,
+        record_ids: impl IntoIterator<Item = BigInt>,
     ) -> Result<impl Iterator<Item = AppRunDto>, DbErr> {
         use app_run::*;
         Ok(Entity::find()
@@ -728,7 +728,7 @@ impl TracingService {
     }
     pub async fn list_records_span_run_infos(
         &self,
-        span_start_record_ids: impl IntoIterator<Item =BigInt>,
+        span_start_record_ids: impl IntoIterator<Item = BigInt>,
     ) -> Result<impl Iterator<Item = TracingSpanRunDto>, DbErr> {
         use tracing_span_run::*;
         Ok(Entity::find()
@@ -740,7 +740,7 @@ impl TracingService {
     }
     pub async fn list_records_span_enter_infos(
         &self,
-        span_start_record_ids: impl IntoIterator<Item =BigInt>,
+        span_start_record_ids: impl IntoIterator<Item = BigInt>,
     ) -> Result<impl Iterator<Item = TracingSpanEnterDto>, DbErr> {
         use tracing_span_enter::*;
         Ok(Entity::find()
@@ -801,7 +801,8 @@ impl TracingService {
                                 Duration::from_nanos(
                                     (node_now - dto.enter_time.timestamp_nanos_opt().unwrap())
                                         as u64,
-                                ).as_millis_f64()
+                                )
+                                .as_millis_f64()
                             });
                         dto
                     })
@@ -988,9 +989,7 @@ impl TracingService {
                             .flatten(),
                         fields
                             .remove(FIELD_DATA_REPEATED_COUNT)
-                            .map(|n| {
-                                n.as_u64().map(|n| n as u32)
-                            })
+                            .map(|n| n.as_u64().map(|n| n as u32))
                             .flatten(),
                         fields,
                     )
@@ -1007,7 +1006,11 @@ impl TracingService {
                 kind: n.kind.parse().unwrap(),
                 level: n
                     .level
-                    .map(|n| tracing_lv_proto::Level::try_from(n).ok().map(|n| n.into()))
+                    .map(|n| {
+                        tracing_lv_proto::proto::Level::try_from(n)
+                            .ok()
+                            .map(|n| n.into())
+                    })
                     .flatten(),
                 span_id: n.span_id,
                 fields: Arc::new(fields),
@@ -1019,9 +1022,9 @@ impl TracingService {
                 span_id_is_stable: Some(span_id_is_stable),
                 parent_id: n.parent_id,
                 span_t_id,
-                parent_span_t_id: n.parent_span_t_id.map(|n| {
-                    u64::from_le_bytes(n.to_le_bytes()).to_smolstr()
-                }),
+                parent_span_t_id: n
+                    .parent_span_t_id
+                    .map(|n| u64::from_le_bytes(n.to_le_bytes()).to_smolstr()),
                 repeated_count,
             }
         }))
@@ -1565,12 +1568,14 @@ impl From<&TracingTreeRecordDto> for Option<AppRunDto> {
                 stop_time: None,
                 exception_end: false,
                 run_elapsed: GLOBAL_DATA
-                   .get_node_now_timestamp_nanos(value.record.app_run_id)
-                   .map(|node_now| {
-                       Duration::from_nanos(
-                           (node_now - value.record.record_time.timestamp_nanos_opt().unwrap()) as u64,
-                       ).as_millis_f64()
-                   }),
+                    .get_node_now_timestamp_nanos(value.record.app_run_id)
+                    .map(|node_now| {
+                        Duration::from_nanos(
+                            (node_now - value.record.record_time.timestamp_nanos_opt().unwrap())
+                                as u64,
+                        )
+                        .as_millis_f64()
+                    }),
             })
         } else if value.record.kind == TracingKind::AppStop {
             Some(AppRunDto {
@@ -1586,12 +1591,14 @@ impl From<&TracingTreeRecordDto> for Option<AppRunDto> {
                 stop_time: Some(value.record.record_time),
                 exception_end: false,
                 run_elapsed: GLOBAL_DATA
-                   .get_node_now_timestamp_nanos(value.record.app_run_id)
-                   .map(|node_now| {
-                       Duration::from_nanos(
-                           (node_now - value.record.record_time.timestamp_nanos_opt().unwrap()) as u64,
-                       ).as_millis_f64()
-                   }),
+                    .get_node_now_timestamp_nanos(value.record.app_run_id)
+                    .map(|node_now| {
+                        Duration::from_nanos(
+                            (node_now - value.record.record_time.timestamp_nanos_opt().unwrap())
+                                as u64,
+                        )
+                        .as_millis_f64()
+                    }),
             })
         } else {
             None

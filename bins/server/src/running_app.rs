@@ -31,7 +31,7 @@ use std::time::Duration;
 use tokio::time::Instant;
 use tonic::Status;
 use tracing::{error, info, warn};
-use tracing_lv_proto::FieldValue;
+use tracing_lv_proto::proto::FieldValue;
 use uuid::Uuid;
 
 const UN_SET_RECORD_ID: BigInt = -1;
@@ -576,14 +576,12 @@ impl RunningApps {
                         let duration = info.record_time - created_span.record_time;
                         let idle_duration = duration - created_span.total_enter_duration;
                         let idle_duration = idle_duration.num_milliseconds() as f64 / 1000.;
-                        let busy_duration = created_span.total_enter_duration.num_milliseconds() as f64 / 1000.;
+                        let busy_duration =
+                            created_span.total_enter_duration.num_milliseconds() as f64 / 1000.;
                         writeln!(
                             self.batch_inserter,
                             r#"update tracing_span_run set busy_duration = '{}',idle_duration='{}',close_record_id='{}' where id = '{}';"#,
-                            busy_duration,
-                            idle_duration,
-                            record_id,
-                            created_span.id,
+                            busy_duration, idle_duration, record_id, created_span.id,
                         )?;
                         Some(TracingTreeRecordVariantDto::SpanRun(TracingSpanRunDto {
                             id: created_span.id,
@@ -677,10 +675,7 @@ impl RunningApps {
                             continue;
                         };
                         let duration = info.record_time - enter_span.record_time;
-                        if let Some(r) = created_span
-                            .total_enter_duration
-                            .checked_add(&duration)
-                        {
+                        if let Some(r) = created_span.total_enter_duration.checked_add(&duration) {
                             created_span.total_enter_duration = r;
                         } else {
                             warn!(
@@ -695,9 +690,7 @@ impl RunningApps {
                         writeln!(
                             self.batch_inserter,
                             r#"update tracing_span_enter set duration = '{}',leave_record_id='{}' where id = '{}';"#,
-                            duration_secs,
-                            record_id,
-                            enter_span_id,
+                            duration_secs, record_id, enter_span_id,
                         )?;
                         Some(TracingTreeRecordVariantDto::SpanEnter(
                             TracingSpanEnterDto {
@@ -794,6 +787,7 @@ impl RunningApps {
             }
             // println!("{}",string);
             let notify_duration = instant.elapsed();
+
             info!(
                 buffed_record_count,
                 buffed_field_record_count,

@@ -15,7 +15,7 @@ use smol_str::{SmolStr, ToSmolStr};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
-use tracing_lv_proto::{field_value, FieldValue, PosInfo};
+use tracing_lv_proto::proto::{field_value, FieldValue, PosInfo};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
@@ -98,7 +98,7 @@ pub enum TracingRecordVariant {
         target: SmolStr,
         module_path: Option<SmolStr>,
         file_line: Option<SmolStr>,
-        level: tracing_lv_proto::Level,
+        level: tracing_lv_proto::proto::Level,
         is_repeated_event: bool,
     },
     AppStart {
@@ -539,7 +539,7 @@ pub struct SpanCacheId {
 }
 
 impl SpanCacheId {
-    pub fn new(app_info: &AppRunInfo, span_info: tracing_lv_proto::SpanInfo) -> Self {
+    pub fn new(app_info: &AppRunInfo, span_info: tracing_lv_proto::proto::SpanInfo) -> Self {
         Self {
             app_id: app_info.id,
             app_version: app_info.version.clone(),

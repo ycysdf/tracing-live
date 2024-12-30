@@ -15,13 +15,14 @@ use std::num::NonZeroUsize;
 use std::str::FromStr;
 use std::sync::Arc;
 use tonic::{Request, Response, Status, Streaming};
-use tracing::{error, info, info_span, warn, Instrument};
-use tracing_lv_proto::tracing_service_server::TracingService;
-use tracing_lv_proto::{
+use tracing::field::debug;
+use tracing::{error, info, info_span, warn, Instrument, Span};
+use tracing_lv_proto::proto::tracing_service_server::TracingService;
+use tracing_lv_proto::proto::{
     field_value, record_param, AppStart, FieldValue, Ping, PingResult, PosInfo, RecordParam,
-    SpanClose, SpanCreate, SpanLeave, SpanRecordField, TracingRecordResult, FLAGS_AUTO_EXPAND,
-    FLAGS_FORK,
+    SpanClose, SpanCreate, SpanLeave, SpanRecordField, TracingRecordResult,
 };
+use tracing_lv_proto::{FLAGS_AUTO_EXPAND, FLAGS_FORK};
 use uuid::Uuid;
 
 #[derive(Clone, Debug, Deref)]
@@ -156,7 +157,7 @@ impl TracingFields {
 pub struct AppRunLifetime {
     tracing_service: crate::tracing_service::TracingService,
     #[allow(dead_code)]
-    record_sender: flume::Sender<RunMsg>,
+    pub record_sender: flume::Sender<RunMsg>,
     pub app_run_info: Arc<AppRunInfo>,
     pub app_start: AppStart,
     pub span_id_cache: lru::LruCache<SpanCacheId, SpanId>,
@@ -169,10 +170,14 @@ impl AppRunLifetime {
     async fn get_span_full_info(
         &mut self,
         #[builder(start_fn)] record_time: i64,
-        #[builder(start_fn)] span_info: tracing_lv_proto::SpanInfo,
+        #[builder(start_fn)] span_info: tracing_lv_proto::proto::SpanInfo,
         #[builder(start_fn)] pos_info: Option<PosInfo>,
         #[builder(into)] fields: Option<TracingFields>,
-        running_span: Option<(Option<Arc<SpanInfo>>, SmolStr, tracing_lv_proto::Level)>,
+        running_span: Option<(
+            Option<Arc<SpanInfo>>,
+            SmolStr,
+            tracing_lv_proto::proto::Level,
+        )>,
     ) -> Result<SpanFullInfo, Status> {
         let span_info = self.new_span_info(span_info, pos_info);
 
@@ -198,7 +203,7 @@ impl AppRunLifetime {
                     target: Some(target.clone()),
                     level: Some(level)
                         .clone()
-                        .map(|n: tracing_lv_proto::Level| n.into()),
+                        .map(|n: tracing_lv_proto::proto::Level| n.into()),
                 }
             }
         };
@@ -215,6 +220,22 @@ impl AppRunLifetime {
     }
 }
 impl AppRunLifetime {
+    pub async fn record(&mut self, variant: record_param::Variant) -> Result<RunMsg, Status> {
+        Ok(match variant {
+            record_param::Variant::AppStart(_) => {
+                unreachable!("AppStart should not be call")
+            }
+            record_param::Variant::SpanCreate(param) => self.span_create(param).await?,
+            record_param::Variant::SpanEnter(param) => self.span_enter(param).await?,
+            record_param::Variant::SpanLeave(param) => self.span_leave(param).await?,
+            record_param::Variant::SpanClose(param) => self.span_close(param).await?,
+            record_param::Variant::SpanRecordField(param) => self.span_record_field(param).await?,
+            record_param::Variant::Event(param) => self.event(param).await?,
+            record_param::Variant::AppStop(_) => {
+                unreachable!("AppStop should not be call")
+            }
+        })
+    }
     async fn app_start(app_start: AppStart) -> Result<TracingRecordVariant, Status> {
         let app_info = Arc::new(AppRunInfo {
             id: Uuid::from_bytes(
@@ -248,6 +269,8 @@ impl AppRunLifetime {
     ) -> Result<Self, Status> {
         let record = Self::app_start(app_start.clone()).await?;
         let app_run_info = record.app_info().clone();
+        Span::current().record("record", debug(&record));
+        Span::current().record("app_run_info", debug(&app_run_info));
         let _ = record_sender.send(RunMsg::Record(record));
         Ok(Self {
             app_start,
@@ -314,13 +337,13 @@ impl AppRunLifetime {
     //     Ok(record_id)
     // }
 
-    fn new_span_cache_id(&self, span_info: tracing_lv_proto::SpanInfo) -> SpanCacheId {
+    fn new_span_cache_id(&self, span_info: tracing_lv_proto::proto::SpanInfo) -> SpanCacheId {
         SpanCacheId::new(self.app_run_info.as_ref(), span_info)
     }
 
     fn new_span_info(
         &self,
-        span_info: tracing_lv_proto::SpanInfo,
+        span_info: tracing_lv_proto::proto::SpanInfo,
         pos_info: Option<PosInfo>,
     ) -> Arc<SpanInfo> {
         Arc::new(SpanInfo {
@@ -334,7 +357,7 @@ impl AppRunLifetime {
         let parent_span_info = param.parent_span_info.map(|n| self.new_span_info(n, None));
 
         let target: SmolStr = param.target.into();
-        let level: tracing_lv_proto::Level = param.level.try_into().unwrap();
+        let level: tracing_lv_proto::proto::Level = param.level.try_into().unwrap();
 
         let mut full_info = self
             .get_span_full_info(param.record_time, param.span_info.unwrap(), param.pos_info)
@@ -373,7 +396,10 @@ impl AppRunLifetime {
             .clone())
     }
 
-    async fn span_enter(&mut self, param: tracing_lv_proto::SpanEnter) -> Result<RunMsg, Status> {
+    async fn span_enter(
+        &mut self,
+        param: tracing_lv_proto::proto::SpanEnter,
+    ) -> Result<RunMsg, Status> {
         Ok(RunMsg::Record(TracingRecordVariant::SpanEnter {
             info: self
                 .get_span_full_info(param.record_time, param.span_info.unwrap(), param.pos_info)
@@ -410,7 +436,7 @@ impl AppRunLifetime {
         }))
     }
 
-    async fn event(&mut self, param: tracing_lv_proto::Event) -> Result<RunMsg, Status> {
+    async fn event(&mut self, param: tracing_lv_proto::proto::Event) -> Result<RunMsg, Status> {
         let record_time = DateTime::from_timestamp_nanos(param.record_time);
         let (span_info, running_span) = if let Some(span_info) = param.span_info {
             let span_info = self.new_span_info(span_info, None);
@@ -456,7 +482,7 @@ impl AppRunLifetime {
         // fields.insert_span_t_id(span_info.t_id);
         // let span_info = self.new_span_info(span_info, pos_info);
         let target: SmolStr = param.target.into();
-        let level: tracing_lv_proto::Level = param.level.try_into().unwrap();
+        let level: tracing_lv_proto::proto::Level = param.level.try_into().unwrap();
 
         // if first_event {
         //     fields.insert_field(FIELD_DATA_FIRST_EVENT, serde_json::Value::Null);
@@ -524,7 +550,7 @@ impl AppRunLifetime {
                 if let Err(err) = self
                     .span_leave(SpanLeave {
                         record_time: record_time.timestamp_nanos_opt().unwrap(),
-                        span_info: Some(tracing_lv_proto::SpanInfo {
+                        span_info: Some(tracing_lv_proto::proto::SpanInfo {
                             t_id,
                             name: span_cache_id.name.to_string(),
                             file_line: span_cache_id.file_line.to_string(),
@@ -541,7 +567,7 @@ impl AppRunLifetime {
                 if let Err(err) = self
                     .span_close(SpanClose {
                         record_time: record_time.timestamp_nanos_opt().unwrap(),
-                        span_info: Some(tracing_lv_proto::SpanInfo {
+                        span_info: Some(tracing_lv_proto::proto::SpanInfo {
                             t_id,
                             name: span_cache_id.name.to_string(),
                             file_line: span_cache_id.file_line.to_string(),
@@ -580,14 +606,17 @@ impl AppRunLifetime {
 pub struct TracingServiceImpl {
     tracing_service: crate::tracing_service::TracingService,
     record_sender: flume::Sender<RunMsg>,
+    pub span: Span,
 }
 
 impl TracingServiceImpl {
     pub fn new(
         tracing_service: crate::tracing_service::TracingService,
         record_sender: flume::Sender<RunMsg>,
+        span: Span,
     ) -> Self {
         Self {
+            span,
             record_sender,
             tracing_service,
         }
@@ -620,11 +649,13 @@ impl TracingService for TracingServiceImpl {
             panic!("must first app start")
         };
         let half_rtt = app_start.rtt / 2.0;
+        let span = info_span!(parent: self.span.id(),"app lifetime",?app_start);
         let mut app_run_lifetime = AppRunLifetime::new(
             app_start,
             self.tracing_service.clone(),
             self.record_sender.clone(),
         )
+        .instrument(info_span!(parent:span.id(),"start",app_run_info="",record=""))
         .await?;
 
         {
@@ -635,8 +666,6 @@ impl TracingService for TracingServiceImpl {
 
             GLOBAL_DATA.add_running_app(app_run_lifetime.app_run_info.run_id, delta_date_nanos);
         }
-
-        let app_run_info = app_run_lifetime.app_run_info.clone();
 
         // Tonic Bug: ?. Future is sometimes canceled
         tokio::spawn(
@@ -649,36 +678,12 @@ impl TracingService for TracingServiceImpl {
                             Ok(RecordParam { send_time, variant }) => {
                                 error_count = 0;
                                 let variant = variant.unwrap();
-                                // if !matches!(variant, record_param::Variant::Event(_)) {
-                                //     app_run_lifetime.last_repeated_event = None;
-                                // }
-                                let record = match variant {
-                                    record_param::Variant::AppStart(_) => {
-                                        unreachable!("AppStart should not be call")
-                                    }
-                                    record_param::Variant::SpanCreate(param) => {
-                                        app_run_lifetime.span_create(param).await?
-                                    }
-                                    record_param::Variant::SpanEnter(param) => {
-                                        app_run_lifetime.span_enter(param).await?
-                                    }
-                                    record_param::Variant::SpanLeave(param) => {
-                                        app_run_lifetime.span_leave(param).await?
-                                    }
-                                    record_param::Variant::SpanClose(param) => {
-                                        app_run_lifetime.span_close(param).await?
-                                    }
-                                    record_param::Variant::SpanRecordField(param) => {
-                                        app_run_lifetime.span_record_field(param).await?
-                                    }
-                                    record_param::Variant::Event(param) => {
-                                        app_run_lifetime.event(param).await?
-                                    }
-                                    record_param::Variant::AppStop(_) => {
-                                        info!("app stop");
-                                        normal_stop = Some(send_time);
-                                        break;
-                                    }
+                                let record = if let record_param::Variant::AppStop(_) = variant {
+                                    info!("app stop");
+                                    normal_stop = Some(send_time);
+                                    break;
+                                } else {
+                                    app_run_lifetime.record(variant).await?
                                 };
                                 if let Err(err) = app_run_lifetime.record_sender.send(record) {
                                     info!(?err, "record_sender send failed. exit!");
@@ -715,7 +720,7 @@ impl TracingService for TracingServiceImpl {
                 info!("app lifetime end");
                 Ok(Response::new(TracingRecordResult {}))
             }
-            .instrument(info_span!("app lifetime", ?app_run_info)),
+            .instrument(span),
         )
         .await
         .map_err(|n| Status::internal(format!("app lifetime panic: {n}")))?
