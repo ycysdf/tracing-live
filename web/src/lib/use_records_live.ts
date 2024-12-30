@@ -89,6 +89,8 @@ export function useRecordsTreeLive(options: {
     }
     param.fields = fields;
     return param
+  }, undefined, {
+    equals: (a, b) => JSON.stringify(a) == JSON.stringify(b)
   });
 
   let [moreRecordId, fetchMore] = createSignal(null);
@@ -205,7 +207,7 @@ export function useRecordsTreeLive(options: {
       });
     }
     return store;
-  });
+  })
   return [r, {
     fetchMore,
     notMoreData
