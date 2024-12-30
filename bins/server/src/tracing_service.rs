@@ -38,6 +38,7 @@ use std::ops::{Add, Range};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::join;
 use tokio_util::time::FutureExt as _;
 use tracing::{error, info, instrument, warn};
 use tracing_lv_proto::proto::{FieldValue, Level};
@@ -295,6 +296,7 @@ pub struct TracingSpanRunDto {
     pub run_elapsed: Option<f64>,
     #[schema(value_type = Object)]
     pub fields: Arc<serde_json::Map<String, serde_json::Value>>,
+    pub related_events: SmallVec<[TracingRecordDto; 2]>,
 }
 
 impl From<tracing_span_run::Model> for TracingSpanRunDto {
@@ -327,6 +329,7 @@ impl From<tracing_span_run::Model> for TracingSpanRunDto {
                     })
                     .unwrap_or_default(),
             ),
+            related_events: Default::default(),
         }
     }
 }
@@ -756,36 +759,30 @@ impl TracingService {
         filter: TracingRecordFilter,
     ) -> Result<impl Iterator<Item = TracingTreeRecordDto>, DbErr> {
         let records: Vec<_> = self.list_records(filter).await?.collect();
-        let mut span_enter_infos: HashMap<_, _> = self
-            .list_records_span_enter_infos(
+        let (span_enter_infos, span_run_infos, app_run_infos) = join!(
+            self.list_records_span_enter_infos(
                 records
                     .iter()
                     .filter(|n| n.kind == TracingKind::SpanEnter)
                     .map(|n| n.id),
-            )
-            .await?
-            .map(|n| (n.record_id, n))
-            .collect();
-        let mut span_run_infos: HashMap<_, _> = self
-            .list_records_span_run_infos(
+            ),
+            self.list_records_span_run_infos(
                 records
                     .iter()
                     .filter(|n| n.kind == TracingKind::SpanCreate)
                     .map(|n| n.id),
-            )
-            .await?
-            .map(|n| (n.record_id, n))
-            .collect();
-        let mut app_run_infos: HashMap<_, _> = self
-            .list_records_app_run_infos(
+            ),
+            self.list_records_app_run_infos(
                 records
                     .iter()
                     .filter(|n| n.kind == TracingKind::AppStart)
                     .map(|n| n.id),
             )
-            .await?
-            .map(|n| (n.record_id, n))
-            .collect();
+        );
+        let mut span_enter_infos: HashMap<_, _> =
+            span_enter_infos?.map(|n| (n.record_id, n)).collect();
+        let mut span_run_infos: HashMap<_, _> = span_run_infos?.map(|n| (n.record_id, n)).collect();
+        let mut app_run_infos: HashMap<_, _> = app_run_infos?.map(|n| (n.record_id, n)).collect();
         Ok(records.into_iter().map(move |n| {
             let variant = if n.kind == TracingKind::SpanCreate {
                 span_run_infos
