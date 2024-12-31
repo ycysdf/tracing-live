@@ -2,7 +2,7 @@ use crate::event_service::EventService;
 use crate::grpc_service::{
     SpanFullInfo, SpanFullInfoBase, SpanInfo, TracingFields, TracingRecordFlags,
     TracingServiceImpl, FIELD_DATA_EMPTY_CHILDREN, FIELD_DATA_FIRST_EVENT, FIELD_DATA_FLAGS,
-    FIELD_DATA_REPEATED_COUNT,
+    FIELD_DATA_IS_CONTAINS_RELATED, FIELD_DATA_REPEATED_COUNT,
 };
 use crate::record::{AppRunInfo, SpanId, TracingRecordVariant};
 use crate::tracing_service::{
@@ -31,7 +31,7 @@ use std::time::Duration;
 use tokio::time::Instant;
 use tonic::Status;
 use tracing::{error, info, warn};
-use tracing_lv_proto::proto::FieldValue;
+use tracing_lv_core::proto::FieldValue;
 use uuid::Uuid;
 
 const UN_SET_RECORD_ID: BigInt = -1;
@@ -354,6 +354,7 @@ impl RunningApps {
                     message,
                     app_info,
                     is_repeated_event,
+                    is_related_event,
                     ..
                 } = record
                 {
@@ -396,6 +397,29 @@ impl RunningApps {
                                             created_span,
                                         )?;
                                         self.dto_buf.push(dto);
+                                    }
+                                }
+                            }
+                            if *is_related_event {
+                                if let Some(span_info) = span_info {
+                                    if let Some(created_span) =
+                                        running_app.get_created_span_mut(span_info.t_id)
+                                    {
+                                        writeln!(
+                                            self.batch_inserter,
+                                            r#"update tracing_record set fields = fields||'{{"{}":true}}'::jsonb where id = '{}';"#,
+                                            FIELD_DATA_IS_CONTAINS_RELATED, created_span.record_id,
+                                        )?;
+                                        let mut info = SpanFullInfo {
+                                            base: created_span.span_base_info.clone(),
+                                            fields: Default::default(),
+                                        };
+                                        info.fields.update_to_contains_related();
+                                        self.dto_buf.push((
+                                            TracingRecordVariant::SpanRecord { info },
+                                            created_span.record_id,
+                                            None,
+                                        ));
                                     }
                                 }
                             }
@@ -540,6 +564,7 @@ impl RunningApps {
                             exception_end: Default::default(),
                             run_elapsed: Some(0.),
                             fields: Arc::new(info.fields.clone().into_json_map()),
+                            related_events: Default::default(),
                         }))
                     }
                     TracingRecordVariant::SpanClose { info } => {
@@ -595,6 +620,7 @@ impl RunningApps {
                             exception_end: Default::default(),
                             run_elapsed: Some(0.),
                             fields: Arc::new(info.fields.clone().into_json_map()),
+                            related_events: Default::default(),
                         }))
                     }
                     TracingRecordVariant::SpanRecord { info } => {
@@ -814,10 +840,11 @@ impl RunningApps {
         ),
         std::fmt::Error,
     > {
-        let info = SpanFullInfo {
+        let mut info = SpanFullInfo {
             base: created_span.span_base_info.clone(),
             fields: Default::default(),
         };
+        info.fields.update_to_no_empty_children();
         writeln!(
             batch_inserter,
             r#"update tracing_record set fields = fields||'{{"{}": {}}}'::jsonb where id = '{}';"#,

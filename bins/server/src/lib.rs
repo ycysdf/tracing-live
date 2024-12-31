@@ -13,5 +13,6 @@ mod setting_service;
 pub mod tracing_service;
 mod web_error;
 pub mod web_service;
+pub mod related_event;
 
 shadow!(build);

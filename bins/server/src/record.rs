@@ -15,7 +15,7 @@ use smol_str::{SmolStr, ToSmolStr};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
-use tracing_lv_proto::proto::{field_value, FieldValue, PosInfo};
+use tracing_lv_core::proto::{field_value, FieldValue, PosInfo};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
@@ -32,6 +32,8 @@ pub enum TracingKind {
     RepEvent,
     AppStart,
     AppStop,
+    DataUpdate,
+    RelatedEvent,
 }
 
 impl FromStr for TracingKind {
@@ -48,6 +50,8 @@ impl FromStr for TracingKind {
             "REP_EVENT" => TracingKind::RepEvent,
             "APP_START" => TracingKind::AppStart,
             "APP_STOP" => TracingKind::AppStop,
+            "DATA_UPDATE" => TracingKind::DataUpdate,
+            "RELATED_EVENT" => TracingKind::RelatedEvent,
             _ => return Err(()),
         })
     }
@@ -65,6 +69,8 @@ impl TracingKind {
             TracingKind::RepEvent => "REP_EVENT",
             TracingKind::AppStart => "APP_START",
             TracingKind::AppStop => "APP_STOP",
+            TracingKind::DataUpdate => "DATE_UPDATE",
+            TracingKind::RelatedEvent => "RELATED_EVENT",
         }
     }
 }
@@ -98,8 +104,9 @@ pub enum TracingRecordVariant {
         target: SmolStr,
         module_path: Option<SmolStr>,
         file_line: Option<SmolStr>,
-        level: tracing_lv_proto::proto::Level,
+        level: tracing_lv_core::proto::Level,
         is_repeated_event: bool,
+        is_related_event: bool,
     },
     AppStart {
         record_time: DateTime<Utc>,
@@ -143,8 +150,8 @@ impl TracingRecordVariant {
             position_info: self.file_line().cloned(),
             creation_time: Utc::now().fixed_offset(),
             parent_id: self.parent_id(),
-            span_t_id: self.span_t_id().map(|n|n.to_smolstr()),
-            parent_span_t_id: self.parent_span_t_id().map(|n|n.to_smolstr()),
+            span_t_id: self.span_t_id().map(|n| n.to_smolstr()),
+            parent_span_t_id: self.parent_span_t_id().map(|n| n.to_smolstr()),
             repeated_count: None,
         }
     }
@@ -175,8 +182,8 @@ impl TracingRecordVariant {
             position_info: self.file_line().cloned(),
             creation_time: Utc::now().fixed_offset(),
             parent_id: self.parent_id(),
-            span_t_id: self.span_t_id().map(|n|n.to_smolstr()),
-            parent_span_t_id: self.parent_span_t_id().map(|n|n.to_smolstr()),
+            span_t_id: self.span_t_id().map(|n| n.to_smolstr()),
+            parent_span_t_id: self.parent_span_t_id().map(|n| n.to_smolstr()),
             repeated_count: None,
         }
     }
@@ -235,19 +242,47 @@ impl TracingRecordVariant {
             }
         }
         if let Some(parent_id) = &filter.parent_id {
+            let me_parent_id = if let TracingRecordVariant::Event {
+                is_related_event,
+                running_span: Some(running_span),
+                ..
+            } = &self
+            {
+                if *is_related_event {
+                    running_span.parent
+                } else {
+                    self.parent_id()
+                }
+            } else {
+                self.parent_id()
+            };
             if parent_id.as_u128() == 0 {
-                if self.parent_id().is_some() {
+                if me_parent_id.is_some() {
                     return false;
                 }
             } else {
-                if self.parent_id().as_ref() != Some(parent_id) {
+                if me_parent_id.as_ref() != Some(parent_id) {
                     return false;
                 }
             }
         }
-        if let Some(span_t_id) = &filter.parent_span_t_id {
-            if let Some(parent_id) = self.parent_span_t_id().as_ref() {
-                if *parent_id != *span_t_id {
+        if let Some(parent_span_t_ids) = &filter.parent_span_t_ids {
+            let parent_span_t_id = if let TracingRecordVariant::Event {
+                is_related_event,
+                running_span: Some(running_span),
+                ..
+            } = &self
+            {
+                if *is_related_event {
+                    running_span.parent_span_t_id
+                } else {
+                    self.parent_span_t_id()
+                }
+            } else {
+                self.parent_span_t_id()
+            };
+            if let Some(parent_id) = parent_span_t_id {
+                if !parent_span_t_ids.is_empty() && !parent_span_t_ids.contains(&parent_id) {
                     return false;
                 }
             } else {
@@ -390,14 +425,14 @@ impl TracingRecordVariant {
             TracingRecordVariant::SpanClose { .. } => TracingKind::SpanClose,
             TracingRecordVariant::SpanRecord { .. } => TracingKind::SpanRecord,
             TracingRecordVariant::Event {
-                is_repeated_event, ..
-            } => {
-                if *is_repeated_event {
-                    TracingKind::RepEvent
-                } else {
-                    TracingKind::Event
-                }
-            }
+                is_repeated_event,
+                is_related_event,
+                ..
+            } => match (is_related_event, is_repeated_event) {
+                (true, _) => TracingKind::RelatedEvent,
+                (false, true) => TracingKind::RepEvent,
+                (false, false) => TracingKind::Event,
+            },
             TracingRecordVariant::AppStart { .. } => TracingKind::AppStart,
             TracingRecordVariant::AppStop { .. } => TracingKind::AppStop,
         }
@@ -539,7 +574,7 @@ pub struct SpanCacheId {
 }
 
 impl SpanCacheId {
-    pub fn new(app_info: &AppRunInfo, span_info: tracing_lv_proto::proto::SpanInfo) -> Self {
+    pub fn new(app_info: &AppRunInfo, span_info: tracing_lv_core::proto::SpanInfo) -> Self {
         Self {
             app_id: app_info.id,
             app_version: app_info.version.clone(),

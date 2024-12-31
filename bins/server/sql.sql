@@ -7,7 +7,7 @@ create table tracing_record
     node_id          varchar(64) not null,
     name             text        not null,
     record_time      timestamptz not null,
-    kind             varchar(12) not null,
+    kind             varchar(16) not null,
     creation_time    timestamptz not null default now(),
     level            int,
     span_id          uuid,

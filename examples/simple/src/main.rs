@@ -1,5 +1,6 @@
 use tracing::{info, info_span, warn};
-use tracing_lv::{TLAppInfo, TLSubscriberExt};
+use tracing_lv::TLSubscriberExt;
+use tracing_lv_core::TLAppInfo;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -14,6 +15,7 @@ async fn main() -> anyhow::Result<()> {
             .node_id("TestNode") // Node Identify
             .with_data("brief", "IP")
             .with_data("second_name", "Cur Os Name"),
+            Default::default(),
             app_main,
         )
         .await?

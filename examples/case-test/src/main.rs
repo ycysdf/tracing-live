@@ -1,5 +1,6 @@
 #![allow(unused_imports)]
 
+use anyhow::anyhow;
 use rand::Rng;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::{Debug, Formatter};
@@ -23,6 +24,7 @@ async fn main() -> anyhow::Result<()> {
             .with_data("brief", "IP")
             .with_data("node_name", "Node Name")
             .with_data("second_name", "Cur Os Name"),
+            Default::default(),
             app_main,
         )
         .await?
@@ -74,6 +76,15 @@ async fn app_main() -> anyhow::Result<()> {
         info!("END EVENT");
     });
 
+    let _ = test_nest_error(0);
+
+    let _ = with_result1();
+    let _ = with_result2();
+    let _ = with_err1();
+    let _ = with_err2();
+    let _ = with_result_and_err1();
+    let _ = with_result_and_err2();
+
     test_auto_expand().await;
 
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
@@ -118,6 +129,45 @@ async fn app_main() -> anyhow::Result<()> {
 
     many_event();
     Ok(())
+}
+
+#[instrument(ret, err)]
+fn test_nest_error(i: usize) -> anyhow::Result<String> {
+    if i == 6 {
+        return Err(anyhow!("Source Error"));
+    }
+    test_nest_error(i + 1)
+}
+
+#[instrument(ret)]
+fn with_result1() -> anyhow::Result<String> {
+    anyhow::Ok("Return Ok Value".into())
+}
+
+#[instrument(ret)]
+fn with_result2() -> anyhow::Result<String> {
+    info!("EVENT1");
+    info!("EVENT2");
+    Err(anyhow!("Return Err"))
+}
+
+#[instrument(err)]
+fn with_err1() -> anyhow::Result<String> {
+    anyhow::Ok("Return Ok Value".into())
+}
+
+#[instrument(err(Debug))]
+fn with_err2() -> anyhow::Result<String> {
+    Err(anyhow!("Return Err"))
+}
+#[instrument(ret, err)]
+fn with_result_and_err1() -> anyhow::Result<String> {
+    anyhow::Ok("Return Ok Value".into())
+}
+
+#[instrument(ret, err)]
+fn with_result_and_err2() -> anyhow::Result<String> {
+    Err(anyhow!("Return Err"))
 }
 
 #[instrument]

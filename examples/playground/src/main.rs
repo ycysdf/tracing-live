@@ -7,7 +7,8 @@ use rand::{thread_rng, Rng};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{error, info, info_span, instrument, warn, Instrument, Span};
-use tracing_lv::{TLAppInfo, TLSubscriberExt};
+use tracing_lv::TLAppInfo;
+use tracing_lv::TLSubscriberExt;
 use tracing_lv::{TLAsyncReadExt, TLAsyncWriteExt, TLStreamExt};
 
 #[tokio::main]
@@ -24,6 +25,7 @@ async fn main() -> anyhow::Result<()> {
             .with_data("brief", "192.168.1.2")
             .with_data("node_name", "TestName")
             .with_data("second_name", "Windows11"),
+            Default::default(),
             app_start,
         )
         .await?)

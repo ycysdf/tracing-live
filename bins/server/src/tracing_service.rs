@@ -1,8 +1,8 @@
 use crate::dyn_query::{TLBinOp, TableColumnInfo, TableInfo};
 use crate::global_data::GLOBAL_DATA;
 use crate::grpc_service::{
-    TracingServiceImpl, FIELD_DATA_LAST_REPEATED_TIME, FIELD_DATA_REPEATED_COUNT,
-    FIELD_DATA_SPAN_T_ID, FIELD_DATA_STABLE_SPAN_ID,
+    TracingServiceImpl, FIELD_DATA_IS_CONTAINS_RELATED, FIELD_DATA_LAST_REPEATED_TIME,
+    FIELD_DATA_REPEATED_COUNT, FIELD_DATA_SPAN_T_ID, FIELD_DATA_STABLE_SPAN_ID,
 };
 use crate::record::{AppRunInfo, SpanCacheId, SpanId, TracingKind, TracingRecordVariant};
 use chrono::{DateTime, FixedOffset, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeDelta, Utc};
@@ -28,7 +28,7 @@ use sea_orm::{DatabaseConnection, DbErr, EntityTrait, InsertResult, QueryFilter,
 use sea_orm_migration::SchemaManager;
 use sea_query_binder::SqlxValues;
 use serde::{Deserialize, Deserializer, Serialize};
-use smallvec::SmallVec;
+use smallvec::{smallvec, SmallVec};
 use smol_str::{SmolStr, ToSmolStr};
 use std::borrow::Cow;
 use std::cmp::Reverse;
@@ -41,7 +41,7 @@ use std::time::Duration;
 use tokio::join;
 use tokio_util::time::FutureExt as _;
 use tracing::{error, info, instrument, warn};
-use tracing_lv_proto::proto::{FieldValue, Level};
+use tracing_lv_core::proto::{FieldValue, Level};
 use tracing_subscriber::filter::FilterExt;
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
@@ -482,7 +482,7 @@ pub struct TracingRecordFilter {
     pub app_run_ids: Option<SmallVec<[Uuid; 2]>>,
     pub node_ids: Option<SmallVec<[String; 2]>>,
     pub parent_id: Option<Uuid>,
-    pub parent_span_t_id: Option<u64>,
+    pub parent_span_t_ids: Option<SmallVec<[u64; 2]>>,
     pub start_time: Option<DateTime<FixedOffset>>,
     pub end_time: Option<DateTime<FixedOffset>>,
     pub kinds: Option<SmallVec<[TracingKind; 2]>>,
@@ -758,8 +758,9 @@ impl TracingService {
         &self,
         filter: TracingRecordFilter,
     ) -> Result<impl Iterator<Item = TracingTreeRecordDto>, DbErr> {
+        let app_run_ids = filter.app_run_ids.clone();
         let records: Vec<_> = self.list_records(filter).await?.collect();
-        let (span_enter_infos, span_run_infos, app_run_infos) = join!(
+        let (span_enter_infos, span_run_infos, related_records, app_run_infos) = join!(
             self.list_records_span_enter_infos(
                 records
                     .iter()
@@ -772,6 +773,19 @@ impl TracingService {
                     .filter(|n| n.kind == TracingKind::SpanCreate)
                     .map(|n| n.id),
             ),
+            self.list_records(TracingRecordFilter {
+                app_run_ids,
+                kinds: Some(smallvec![TracingKind::RelatedEvent]),
+                parent_span_t_ids: Some(
+                    records
+                        .iter()
+                        .filter(|n| n.kind == TracingKind::SpanCreate
+                            && n.fields.contains_key(FIELD_DATA_IS_CONTAINS_RELATED))
+                        .filter_map(|n| n.span_t_id.as_ref().map(|n| n.parse().ok()).flatten())
+                        .collect()
+                ),
+                ..Default::default()
+            }),
             self.list_records_app_run_infos(
                 records
                     .iter()
@@ -783,11 +797,23 @@ impl TracingService {
             span_enter_infos?.map(|n| (n.record_id, n)).collect();
         let mut span_run_infos: HashMap<_, _> = span_run_infos?.map(|n| (n.record_id, n)).collect();
         let mut app_run_infos: HashMap<_, _> = app_run_infos?.map(|n| (n.record_id, n)).collect();
+        let mut related_records: HashMap<_, _> =
+            related_records?.fold(HashMap::default(), |mut state, n| {
+                if let Some(parent_span_t_id) = n.parent_span_t_id.clone() {
+                    let arr = state.entry(parent_span_t_id).or_insert(smallvec![]);
+                    arr.push(n);
+                }
+                state
+            });
         Ok(records.into_iter().map(move |n| {
             let variant = if n.kind == TracingKind::SpanCreate {
-                span_run_infos
-                    .remove(&n.id)
-                    .map(TracingTreeRecordVariantDto::SpanRun)
+                span_run_infos.remove(&n.id).map(|mut a| {
+                    if let Some(span_t_id) = n.span_t_id.as_ref() {
+                        a.related_events =
+                            related_records.remove(span_t_id).unwrap_or_default();
+                    }
+                    TracingTreeRecordVariantDto::SpanRun(a)
+                })
             } else if n.kind == TracingKind::SpanEnter {
                 span_enter_infos
                     .remove(&n.id)
@@ -856,8 +882,14 @@ impl TracingService {
                         .and(Column::Kind.ne(TracingKind::AppStart.as_str()))
                 })
             })
-            .apply_if(filter.parent_span_t_id, |n, span_t_id| {
-                n.filter(Column::ParentSpanTId.eq(i64::from_le_bytes(span_t_id.to_le_bytes())))
+            .apply_if(filter.parent_span_t_ids, |n, span_t_id| {
+                match span_t_id.len() {
+                    1 => n.filter(
+                        Column::ParentSpanTId.eq(i64::from_le_bytes(span_t_id[0].to_le_bytes())),
+                    ),
+                    0 => n,
+                    _ => n.filter(Column::ParentSpanTId.is_in(span_t_id)),
+                }
             })
             .apply_if(filter.start_time, |n, start_time| {
                 n.filter(Column::RecordTime.gt(start_time))
@@ -893,23 +925,42 @@ impl TracingService {
             select = select.filter(condition);
         }
         if let Some(node_ids) = filter.node_ids {
-            select = select.filter(Column::NodeId.is_in(node_ids));
+            select = match node_ids.len() {
+                1 => select.filter(Column::NodeId.eq(node_ids[0].as_str())),
+                0 => select,
+                _ => select.filter(Column::NodeId.is_in(node_ids)),
+            }
         }
         if let Some(app_run_ids) = filter.app_run_ids {
-            select = select.filter(Column::AppRunId.is_in(app_run_ids));
+            select = match app_run_ids.len() {
+                1 => select.filter(Column::AppRunId.eq(app_run_ids[0])),
+                0 => select,
+                _ => select.filter(Column::AppRunId.is_in(app_run_ids)),
+            }
         }
         if let Some(levels) = filter.levels {
-            select = select.filter(
-                Cond::any()
-                    .add(Column::Level.is_in(levels.into_iter().map(|n| {
-                        let level: Level = n.into();
-                        level as u32
-                    })))
-                    .add(Column::Level.is_null()),
-            );
+            select = match levels.len() {
+                1 => select.filter(Column::Level.eq({
+                    let level: Level = levels[0].into();
+                    level as u32
+                })),
+                0 => select,
+                _ => select.filter(
+                    Cond::any()
+                        .add(Column::Level.is_in(levels.into_iter().map(|n| {
+                            let level: Level = n.into();
+                            level as u32
+                        })))
+                        .add(Column::Level.is_null()),
+                ),
+            }
         }
         if let Some(span_ids) = filter.span_ids {
-            select = select.filter(Column::SpanId.is_in(span_ids));
+            select = match span_ids.len() {
+                1 => select.filter(Column::SpanId.eq(span_ids[0])),
+                0 => select,
+                _ => select.filter(Column::SpanId.is_in(span_ids)),
+            }
         }
         {
             let targets = filter.targets.unwrap_or_default();
@@ -922,11 +973,14 @@ impl TracingService {
             }
         }
         if let Some(kinds) = filter.kinds.as_ref() {
-            select = select.filter(Column::Kind.is_in(kinds.iter().map(|n| n.as_str())));
+            select = match kinds.len() {
+                1 => select.filter(Column::Kind.eq(kinds[0].as_str())),
+                0 => select,
+                _ => select.filter(Column::Kind.is_in(kinds.iter().map(|n| n.as_str()))),
+            }
         }
         for TracingRecordFieldFilter { name, op, value } in filter.fields.unwrap_or_default() {
             let value = SimpleExpr::Value(Value::String(value.map(|n| n.into())));
-
             select = select.filter(
                 Expr::col(Column::Fields)
                     .cast_json_field(name)
@@ -954,10 +1008,10 @@ impl TracingService {
                     .await?
             } else {
                 select
-                    .order_by_desc(Column::Id)
+                    .order_by_asc(Column::Id)
                     .cursor_by(Column::Id)
                     .after(cursor.id)
-                    .last(count)
+                    .first(count)
                     .all(&self.dc)
                     .await?
             }
@@ -1004,7 +1058,7 @@ impl TracingService {
                 level: n
                     .level
                     .map(|n| {
-                        tracing_lv_proto::proto::Level::try_from(n)
+                        tracing_lv_core::proto::Level::try_from(n)
                             .ok()
                             .map(|n| n.into())
                     })

@@ -1,5 +1,8 @@
 use crate::global_data::GLOBAL_DATA;
 use crate::record::{AppRunInfo, SpanCacheId, SpanId, TracingKind, TracingRecordVariant};
+use crate::related_event::{
+    ErrSpanRelatedEvent, ReturnSpanRelatedEvent, SpanRelatedEvent, TowerHttpSpanRelatedEvent,
+};
 use crate::running_app::RunMsg;
 use crate::tracing_service::{BigInt, TracingLevel, TracingRecordBatchInserter};
 use bitflags::bitflags;
@@ -16,13 +19,13 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tonic::{Request, Response, Status, Streaming};
 use tracing::field::debug;
-use tracing::{error, info, info_span, warn, Instrument, Span};
-use tracing_lv_proto::proto::tracing_service_server::TracingService;
-use tracing_lv_proto::proto::{
+use tracing::{error, info, info_span, instrument, warn, Instrument, Span};
+use tracing_lv_core::proto::tracing_service_server::TracingService;
+use tracing_lv_core::proto::{
     field_value, record_param, AppStart, FieldValue, Ping, PingResult, PosInfo, RecordParam,
     SpanClose, SpanCreate, SpanLeave, SpanRecordField, TracingRecordResult,
 };
-use tracing_lv_proto::{FLAGS_AUTO_EXPAND, FLAGS_FORK};
+use tracing_lv_core::{FLAGS_AUTO_EXPAND, FLAGS_FORK};
 use uuid::Uuid;
 
 #[derive(Clone, Debug, Deref)]
@@ -40,10 +43,11 @@ pub struct SpanFullInfo {
     pub fields: TracingFields,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deref)]
 pub struct SpanInfo {
     pub module_path: SmolStr,
     pub t_id: u64,
+    #[deref]
     pub cache_id: SpanCacheId,
 }
 
@@ -123,6 +127,12 @@ impl TracingFields {
     pub fn update_to_no_empty_children(&mut self) -> Option<FieldValue> {
         self.insert_field(FIELD_DATA_EMPTY_CHILDREN, serde_json::Value::Bool(false))
     }
+    pub fn update_to_contains_related(&mut self) -> Option<FieldValue> {
+        self.insert_field(
+            FIELD_DATA_IS_CONTAINS_RELATED,
+            serde_json::Value::Bool(false),
+        )
+    }
     pub fn insert_span_t_id(&mut self, value: Option<u64>) -> Option<FieldValue> {
         if value.is_none() {
             return None;
@@ -138,9 +148,14 @@ impl TracingFields {
     pub fn insert_field(
         &mut self,
         name: impl Into<String>,
-        value: impl Into<FieldValue>,
+        value: impl Into<field_value::Variant>,
     ) -> Option<FieldValue> {
-        self.0.insert(name.into(), value.into())
+        self.0.insert(
+            name.into(),
+            FieldValue {
+                variant: Some(value.into()),
+            },
+        )
     }
 
     pub fn into_json_iter(self) -> impl Iterator<Item = (String, serde_json::Value)> {
@@ -170,13 +185,13 @@ impl AppRunLifetime {
     async fn get_span_full_info(
         &mut self,
         #[builder(start_fn)] record_time: i64,
-        #[builder(start_fn)] span_info: tracing_lv_proto::proto::SpanInfo,
+        #[builder(start_fn)] span_info: tracing_lv_core::proto::SpanInfo,
         #[builder(start_fn)] pos_info: Option<PosInfo>,
         #[builder(into)] fields: Option<TracingFields>,
         running_span: Option<(
             Option<Arc<SpanInfo>>,
             SmolStr,
-            tracing_lv_proto::proto::Level,
+            tracing_lv_core::proto::Level,
         )>,
     ) -> Result<SpanFullInfo, Status> {
         let span_info = self.new_span_info(span_info, pos_info);
@@ -203,7 +218,7 @@ impl AppRunLifetime {
                     target: Some(target.clone()),
                     level: Some(level)
                         .clone()
-                        .map(|n: tracing_lv_proto::proto::Level| n.into()),
+                        .map(|n: tracing_lv_core::proto::Level| n.into()),
                 }
             }
         };
@@ -262,6 +277,7 @@ impl AppRunLifetime {
             fields: app_start.data.into(),
         })
     }
+
     pub async fn new(
         app_start: AppStart,
         tracing_service: crate::tracing_service::TracingService,
@@ -337,13 +353,13 @@ impl AppRunLifetime {
     //     Ok(record_id)
     // }
 
-    fn new_span_cache_id(&self, span_info: tracing_lv_proto::proto::SpanInfo) -> SpanCacheId {
+    fn new_span_cache_id(&self, span_info: tracing_lv_core::proto::SpanInfo) -> SpanCacheId {
         SpanCacheId::new(self.app_run_info.as_ref(), span_info)
     }
 
     fn new_span_info(
         &self,
-        span_info: tracing_lv_proto::proto::SpanInfo,
+        span_info: tracing_lv_core::proto::SpanInfo,
         pos_info: Option<PosInfo>,
     ) -> Arc<SpanInfo> {
         Arc::new(SpanInfo {
@@ -357,7 +373,7 @@ impl AppRunLifetime {
         let parent_span_info = param.parent_span_info.map(|n| self.new_span_info(n, None));
 
         let target: SmolStr = param.target.into();
-        let level: tracing_lv_proto::proto::Level = param.level.try_into().unwrap();
+        let level: tracing_lv_core::proto::Level = param.level.try_into().unwrap();
 
         let mut full_info = self
             .get_span_full_info(param.record_time, param.span_info.unwrap(), param.pos_info)
@@ -398,7 +414,7 @@ impl AppRunLifetime {
 
     async fn span_enter(
         &mut self,
-        param: tracing_lv_proto::proto::SpanEnter,
+        param: tracing_lv_core::proto::SpanEnter,
     ) -> Result<RunMsg, Status> {
         Ok(RunMsg::Record(TracingRecordVariant::SpanEnter {
             info: self
@@ -436,7 +452,7 @@ impl AppRunLifetime {
         }))
     }
 
-    async fn event(&mut self, param: tracing_lv_proto::proto::Event) -> Result<RunMsg, Status> {
+    async fn event(&mut self, param: tracing_lv_core::proto::Event) -> Result<RunMsg, Status> {
         let record_time = DateTime::from_timestamp_nanos(param.record_time);
         let (span_info, running_span) = if let Some(span_info) = param.span_info {
             let span_info = self.new_span_info(span_info, None);
@@ -446,71 +462,48 @@ impl AppRunLifetime {
         } else {
             (None, None)
         };
-        // let (repeated_record_id, first_event, span) = if let Some(span_info) = param.span_info {
-        //     let span_info = self.new_span_info(span_info, None);
-        //     let running_span = self.running_spans.get(&span_info.t_id).unwrap().clone();
-        //     (
-        //         if running_span
-        //             .last_repeated_event
-        //             .as_ref()
-        //             .map(|n| n.1.as_str())
-        //             == Some(param.message.as_str())
-        //         {
-        //             Some(running_span.last_repeated_event.as_ref().unwrap().0)
-        //         } else {
-        //             None
-        //         },
-        //         running_span.last_repeated_event.is_none(),
-        //         Some((span_info, running_span)),
-        //     )
-        // } else {
-        //     (
-        //         if self.last_repeated_event.as_ref().map(|n| n.1.as_str())
-        //             == Some(param.message.as_str())
-        //         {
-        //             Some(self.last_repeated_event.as_ref().unwrap().0)
-        //         } else {
-        //             None
-        //         },
-        //         self.last_repeated_event.is_none(),
-        //         None,
-        //     )
-        // };
-        // let (span_info, running_span) = span.unzip();
-        // let is_repeated = repeated_record_id.is_some();
         let mut fields: TracingFields = param.fields.into();
-        // fields.insert_span_t_id(span_info.t_id);
-        // let span_info = self.new_span_info(span_info, pos_info);
         let target: SmolStr = param.target.into();
-        let level: tracing_lv_proto::proto::Level = param.level.try_into().unwrap();
-
-        // if first_event {
-        //     fields.insert_field(FIELD_DATA_FIRST_EVENT, serde_json::Value::Null);
-        // }
+        let level: tracing_lv_core::proto::Level = param.level.try_into().unwrap();
         fields.insert_span_t_id(span_info.as_ref().map(|n| n.t_id));
-
-        // if let Some(repeated_record_id) = repeated_record_id {
-        //     self.tracing_service.incremental_repeated_event(repeated_record_id, record_time.fixed_offset())
-        //     .await
-        //     .map_err(|err| {
-        //        Status::internal(format!("repeated_record_id {repeated_record_id:?} incremental_repeated_event error: {err:?}"))
-        //     })?;
-        // } else {
-        //     // TODO:
-        //     if let Some(span_info) = span_info.as_ref() {
-        //         let running_span = self.running_spans.get_mut(&span_info.t_id).unwrap();
-        //         running_span.last_repeated_event = Some((record_id, param.message.to_smolstr()));
-        //     } else {
-        //         self.last_repeated_event = Some((record_id, param.message.to_smolstr()));
-        //     }
-        // }
         let (module_path, file_line) = param
             .pos_info
             .map(|n| (n.module_path.into(), n.file_line.into()))
             .unzip();
+        let mut message = param.message.into();
+        let is_related_event = {
+            let span_related_event_objs: &[&dyn SpanRelatedEvent] = &[
+                &ReturnSpanRelatedEvent {},
+                &ErrSpanRelatedEvent {},
+                &TowerHttpSpanRelatedEvent {},
+            ];
+            if let Some(span_info) = span_info.as_ref() {
+                span_related_event_objs.iter().any(|n| {
+                    match n.is_related_and_handle(
+                        &self.app_run_info,
+                        &mut message,
+                        &span_info,
+                        &running_span,
+                        &mut fields,
+                        &target,
+                        &module_path,
+                    ) {
+                        None => false,
+                        Some(name) => {
+                            fields.insert_field(FIELD_DATA_RELATED_NAME, name);
+                            true
+                        }
+                    }
+                })
+            } else {
+                false
+            }
+        };
+
+        if is_related_event {}
 
         Ok(RunMsg::Record(TracingRecordVariant::Event {
-            message: param.message.into(),
+            message,
             module_path,
             file_line,
             record_time,
@@ -521,6 +514,7 @@ impl AppRunLifetime {
             level,
             app_info: self.app_run_info.clone(),
             is_repeated_event: false,
+            is_related_event,
         }))
     }
 
@@ -550,7 +544,7 @@ impl AppRunLifetime {
                 if let Err(err) = self
                     .span_leave(SpanLeave {
                         record_time: record_time.timestamp_nanos_opt().unwrap(),
-                        span_info: Some(tracing_lv_proto::proto::SpanInfo {
+                        span_info: Some(tracing_lv_core::proto::SpanInfo {
                             t_id,
                             name: span_cache_id.name.to_string(),
                             file_line: span_cache_id.file_line.to_string(),
@@ -567,7 +561,7 @@ impl AppRunLifetime {
                 if let Err(err) = self
                     .span_close(SpanClose {
                         record_time: record_time.timestamp_nanos_opt().unwrap(),
-                        span_info: Some(tracing_lv_proto::proto::SpanInfo {
+                        span_info: Some(tracing_lv_core::proto::SpanInfo {
                             t_id,
                             name: span_cache_id.name.to_string(),
                             file_line: span_cache_id.file_line.to_string(),
@@ -629,6 +623,8 @@ pub const FIELD_DATA_SPAN_T_ID: &'static str = "__data.span_t_id";
 pub const FIELD_DATA_FLAGS: &'static str = "__data.flags";
 pub const FIELD_DATA_EMPTY_CHILDREN: &'static str = "__data.empty_children";
 pub const FIELD_DATA_FIRST_EVENT: &'static str = "__data.first_event";
+pub const FIELD_DATA_IS_CONTAINS_RELATED: &'static str = "__data.is_contains_related";
+pub const FIELD_DATA_RELATED_NAME: &'static str = "__data.related_name";
 pub const FIELD_DATA_REPEATED_COUNT: &'static str = "__data.repeated_count";
 pub const FIELD_DATA_LAST_REPEATED_TIME: &'static str = "__data.last_repeated_time";
 pub const CONVENTION_FLAGS_FIELD: &'static str = FLAGS_AUTO_EXPAND;
