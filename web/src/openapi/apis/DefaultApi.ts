@@ -64,7 +64,7 @@ export interface ListRecordsRequest {
     app_run_ids?: Array<string> | null;
     node_ids?: Array<string> | null;
     parent_id?: string | null;
-    parent_span_t_id?: number;
+    parent_span_t_ids?: Array<number> | null;
     start_time?: Date | null;
     end_time?: Date | null;
     kinds?: Array<TracingKind> | null;
@@ -84,7 +84,7 @@ export interface ListTreeRecordsRequest {
     app_run_ids?: Array<string> | null;
     node_ids?: Array<string> | null;
     parent_id?: string | null;
-    parent_span_t_id?: number;
+    parent_span_t_ids?: Array<number> | null;
     start_time?: Date | null;
     end_time?: Date | null;
     kinds?: Array<TracingKind> | null;
@@ -202,8 +202,8 @@ export class DefaultApi extends runtime.BaseAPI {
             queryParameters['parent_id'] = requestParameters['parent_id'];
         }
 
-        if (requestParameters['parent_span_t_id'] != null) {
-            queryParameters['parent_span_t_id'] = requestParameters['parent_span_t_id'];
+        if (requestParameters['parent_span_t_ids'] != null) {
+            queryParameters['parent_span_t_ids'] = requestParameters['parent_span_t_ids'];
         }
 
         if (requestParameters['start_time'] != null) {
@@ -294,8 +294,8 @@ export class DefaultApi extends runtime.BaseAPI {
             queryParameters['parent_id'] = requestParameters['parent_id'];
         }
 
-        if (requestParameters['parent_span_t_id'] != null) {
-            queryParameters['parent_span_t_id'] = requestParameters['parent_span_t_id'];
+        if (requestParameters['parent_span_t_ids'] != null) {
+            queryParameters['parent_span_t_ids'] = requestParameters['parent_span_t_ids'];
         }
 
         if (requestParameters['start_time'] != null) {

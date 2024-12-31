@@ -19,11 +19,12 @@ import {
 import qs from "qs";
 import {TracingTreeFilter} from "~/routes/traces";
 import {createAsync} from "@solidjs/router";
-import {createStore, produce, reconcile} from "solid-js/store";
+import {createStore, produce, reconcile, unwrap} from "solid-js/store";
 
 export interface RecordsTreeData {
   records: TracingTreeRecordDto[];
-  more_loading: boolean
+  more_loading: boolean;
+  is_end: boolean
 }
 
 export function useRecordsTreeLive(options: {
@@ -37,13 +38,14 @@ export function useRecordsTreeLive(options: {
   count?: number,
   scene: Accessor<TracingRecordScene | null>,
   kinds?: TracingKind[],
-}): [Accessor<RecordsTreeData>, { fetchMore: Setter<number>, notMoreData: Accessor<boolean> }] {
+}): [Accessor<RecordsTreeData>, { fetchMoreOlder: Setter<number>,fetchMore: Setter<number>, notMoreOlderData: Accessor<boolean> }] {
 
 
-  let [notMoreData, setNotMoreData] = createSignal<boolean>(false);
+  let [notMoreOlderData, setNotMoreOlderData] = createSignal<boolean>(false);
   let [store, setStore] = createStore<RecordsTreeData>({
     records: [],
-    more_loading: false
+    more_loading: false,
+    is_end: true
   });
 
   let count = options.count ?? 50;
@@ -60,7 +62,7 @@ export function useRecordsTreeLive(options: {
       levels: options.filter.selectedLevels,
       app_build_ids: options.filter.selectedAppIds?.map(n => [n, null]),
       node_ids: options.filter.selectedNodeIds,
-      parent_span_t_id: options.parentSpanTId() as any,
+      parent_span_t_ids: options.parentSpanTId() != null ? [options.parentSpanTId() as any] : [],
       search: options.search ? options.search() : undefined,
     };
     if (parentSpanTId == null) {
@@ -93,10 +95,46 @@ export function useRecordsTreeLive(options: {
     equals: (a, b) => JSON.stringify(a) == JSON.stringify(b)
   });
 
-  let [moreRecordId, fetchMore] = createSignal(null);
-
+  let [olderMoreRecordId, fetchMoreOlder] = createSignal(null,{
+    equals: false
+  });
+  let [moreRecordId, fetchMore] = createSignal(null,{
+    equals: false
+  });
+  // let [moreRecordId, fetchMore] = createSignal(null);
   createAsync(async () => {
-    let moreRecordIdValue = moreRecordId();
+    let _moreRecordId = moreRecordId();
+
+    if (_moreRecordId != null) {
+      setStore('more_loading', true);
+      let param: ListTreeRecordsRequest = untrack(() => recordsRequest());
+      param.cursor = CursorInfoToJSON({
+        id: _moreRecordId,
+        isBefore: false
+      });
+      let newData = (await HttpClient.listTreeRecords(param)) ?? [];
+      let is_end = false;
+      if (newData.length <= count) {
+        is_end = true;
+      }
+      if (newData.length == (count + 1)) {
+        newData.pop();
+      }
+      setStore(produce(n => {
+        n.records.push(...newData);
+        if (n.records.length > count * 2) {
+          setNotMoreOlderData(false);
+        }
+        n.is_end = is_end;
+        while (n.records.length > count * 2) {
+          n.records.shift();
+        }
+        n.more_loading = false;
+      }))
+    }
+  });
+  createAsync(async () => {
+    let moreRecordIdValue = olderMoreRecordId();
 
     if (moreRecordIdValue != null) {
       setStore('more_loading', true);
@@ -107,16 +145,18 @@ export function useRecordsTreeLive(options: {
       });
       let olderData = (await HttpClient.listTreeRecords(param)) ?? [];
       if (olderData.length <= count) {
-        setNotMoreData(true);
+        setNotMoreOlderData(true);
       }
       if (olderData.length == (count + 1)) {
         olderData.shift();
       }
       setStore(produce(n => {
         n.records.unshift(...olderData);
-        // if (n.records.length> count*2) {
-        //   n.records.slice(0, count*2);
-        // }
+        if (n.records.length > count * 2) {
+
+          n.records = n.records.slice(0, count * 2);
+          n.is_end = false;
+        }
         n.more_loading = false;
       }))
     }
@@ -134,11 +174,15 @@ export function useRecordsTreeLive(options: {
 
   let r = createAsync(async () => {
     let owner = getOwner();
-    fetchMore(null);
+    fetchMoreOlder(null);
+    // if (!store.is_end){
+    //   eventSource?.close();
+    //   return store;
+    // }
     let param = recordsRequest();
     let r: TracingTreeRecordDto[] = (await HttpClient.listTreeRecords(param)) ?? [];
     if (r.length <= count) {
-      setNotMoreData(true);
+      setNotMoreOlderData(true);
     }
     if (r.length == (count + 1)) {
       r.shift();
@@ -166,7 +210,8 @@ export function useRecordsTreeLive(options: {
         if (record.record.kind == TracingKind.SpanClose) {
           setStore('records', n => n.record.spanTId == record.record.spanTId && n.record.kind == TracingKind.SpanCreate, produce(n => {
             n.end = record.end;
-            n.variant = record.variant;
+            delete record.variant['spanRun']['relatedEvents'];
+            n.variant['spanRun'] = {...n.variant['spanRun'], ...record.variant['spanRun']};
           }))
 
         } else if (record.record.kind == TracingKind.AppStop) {
@@ -181,21 +226,35 @@ export function useRecordsTreeLive(options: {
             }
             n.records.at(-1).record.repeatedCount += 1;
           }))
+        } else if (record.record.kind == TracingKind.RelatedEvent) {
+          // @ts-ignore
+          setStore('records', a => a.record.spanTId == record.record.spanTId && a.record.kind == TracingKind.SpanCreate, 'variant', 'spanRun', produce((n: any) => {
+            n.relatedEvents.push(record.record);
+          }))
         } else if (record.record.kind == TracingKind.SpanRecord) {
           setStore('records', a => a.record.spanTId == record.record.spanTId && a.record.kind == TracingKind.SpanCreate, produce(n => {
             for (let key in record.record.fields) {
               n.record.fields[key] = record.record.fields[key];
-              (n.variant as TracingTreeRecordVariantDtoOneOf).spanRun.fields[key] = record.record.fields[key];
+              if ((n.variant as TracingTreeRecordVariantDtoOneOf)?.spanRun?.fields) {
+                (n.variant as TracingTreeRecordVariantDtoOneOf).spanRun.fields[key] = record.record.fields[key];
+              }
             }
           }))
         } else {
-
-          startTransition(() => {
-            setStore(produce(n => {
-              n.records.push(record)
-            }))
-          });
-          options.onLivedAdded?.call(null);
+          if (store.is_end) {
+            startTransition(() => {
+              setStore(produce(n => {
+                n.records.push(record)
+                if (n.records.length > count * 2){
+                  setNotMoreOlderData(false);
+                }
+                while (n.records.length > count * 2){
+                  n.records.shift();
+                }
+              }))
+            });
+            options.onLivedAdded?.call(null);
+          }
         }
       };
 
@@ -209,7 +268,8 @@ export function useRecordsTreeLive(options: {
     return store;
   })
   return [r, {
+    fetchMoreOlder,
     fetchMore,
-    notMoreData
+    notMoreOlderData
   }]
 }

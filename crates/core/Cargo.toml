@@ -1,0 +1,28 @@
+[package]
+name = "tracing-lv-core"
+version = "0.0.1-beta.3"
+edition = "2021"
+description = "Track your apps in real time"
+license = "MIT"
+
+[features]
+default = []
+client = []
+server = []
+std = ["dep:tonic", "dep:flume", "chrono/now"]
+
+[dependencies]
+tonic = { version = "0.12", features = ["prost", "codegen", ], default-features = false, optional = true }
+chrono = { version = "0.4", features = ["serde"], default-features = false }
+uuid = { version = "1", features = ["v4"], default-features = false }
+flume = { version = "0.11", optional = true }
+hashbrown = { version = "0.15", features = ["serde", "default-hasher"], default-features = false }
+smol_str = { version = "0.2", features = ["serde"], default-features = false }
+tracing = { version = "0.1", default-features = false }
+tracing-subscriber = { version = "0.3", default-features = false }
+prost = "0.13"
+serde_json = { version = "1", features = ["alloc"], default-features = false }
+serde = { version = "1", features = ["derive", "alloc"], default-features = false }
+derive_more = { version = "1", features = ["from"], default-features = false }
+#[build-dependencies]
+#tonic-build = { version = "0.12", features = ["prost"] }

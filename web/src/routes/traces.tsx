@@ -30,10 +30,18 @@ import {
   type TracingTreeRecordVariantDtoOneOf1,
   TracingTreeRecordVariantDtoOneOf2
 } from "~/openapi";
-import {ALL_LEVELS, BASE_URL, durationOptions, getLevelColor, NULL_STR, RECORD_FIELDS} from "~/consts";
+import {
+  ALL_LEVELS,
+  BASE_URL,
+  durationOptions,
+  EXPANDABLE_KINDS,
+  getLevelColor,
+  NULL_STR,
+  RECORD_FIELDS
+} from "~/consts";
 import {getNodesPage} from "~/cache";
 import {useRecordsTreeLive} from "~/lib/use_records_live";
-import {ChevronRight, Dot} from "lucide-solid";
+import {ChevronRight, ChevronsUpDown, Dot, FoldVertical, LogIn, UnfoldVertical} from "lucide-solid";
 import {makePersisted} from "@solid-primitives/storage";
 import {Loading, LoadingPanel} from "~/components/Loading";
 import {createElementBounds} from "@solid-primitives/bounds";
@@ -52,8 +60,17 @@ import {Index} from 'solid-js';
 import {debounce, Scheduled} from "@solid-primitives/scheduled";
 import {AppEmpty} from "~/components/Empty";
 import {t} from "i18next";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+  ContextMenuSeparator,
+  ContextMenuGroupLabel, ContextMenuShortcut
+} from "~/components/ui/context-menu";
 
-const CurSelectedTreeItem = createContext<Signal<TracingTreeRecordDto>>();
+const CurSelectedTreeItem = createContext<Signal<SelectedTreeItem | null>>();
+const CurTracePath = createContext<Signal<TracePathItem[]>>();
 
 export function SelectedTreeItemProvider(props: {
   defaultValue?: TracingTreeRecordDto,
@@ -68,10 +85,10 @@ export function SelectedTreeItemProvider(props: {
   );
 }
 
-export type ShowMode = "Tree" | "Table" | "AppTable";
+export type ShowMode = "Tree" | "Flatten";
 export type TimeShowMode = "ServerTime" | "LocalTime" | "AppSetupTime";
 
-export const SHOW_MODES: ShowMode[] = ["Tree", "AppTable", "Table"];
+export const SHOW_MODES: ShowMode[] = ["Tree", "Flatten"];
 
 // export const TIME_SHOW_MODES: TimeShowMode[] = ["ServerTime", "LocalTime", "AppSetupTime"];
 
@@ -235,6 +252,9 @@ export function createIsLoading(debounce_time: number = 100): IsLoadingObj {
   return result;
 }
 
+export interface TracePathItem {
+  record: TracingTreeRecordDto,
+}
 
 export function Traces() {
   const [tracingTreeFilter, setTracingTreeFilter] = makePersisted(createStore<TracingTreeFilter>({
@@ -286,286 +306,305 @@ export function Traces() {
     }
   });
 
-  let nodesContainerElement: HTMLElement;
+  let nodesContainerElement: HTMLDivElement;
 
   let [nodeSearch, _setNodeSearch] = createSignal('');
   let setNodeSearch = debounce(_setNodeSearch, 300);
+  let spanTId = () => {
+    let curTracePath: Signal<TracePathItem[]> = useContext(CurTracePath);
+    let curValue = curTracePath[0]();
+    if (curValue.length > 0) {
+      return curValue.at(-1).record.record.spanTId
+    } else {
+      return null
+    }
+  }
   return (
     <Show when={nodesPage}>
-      <SelectedTreeItemProvider>
-        <div class="flex flex-col gap-3 overflow-hidden flex-grow">
-          <div class="panel flex flex-col p-2 gap-2  flex-grow-0">
-            <div class="flex flex-row border-b pb-2 gap-2 justify-between">
-              <div class={"flex flex-row flex-1"}>
-                <For each={nodesPage.apps}>
-                  {n => <div
-                    class={"flex gap-1 text-nowrap items-center hover:bg-stone-100 cursor-pointer rounded px-2 py-1 -my-1"}
-                    onClick={() => {
-                      appSelection.toggle(n.id);
-                    }}>
-                    <Checkbox onClick={async (e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      appSelection.toggle(n.id);
-                    }} checked={appSelection.isSelect(n.id)}/>
-                    <div class="text-sm">{n.name} ( {n.nodeCount} )</div>
-                  </div>}
-                </For>
-              </div>
-              <input onChange={n => setNodeSearch(n.target.value)} placeholder={t("common:search")}
-                     class={"p-2 px-3 border-x -m-2 outline-none text-sm"}/>
-              {/*<div>{nodesPage.nodes.filter(n => n.stopTime == null).length}/{nodesPage.nodes?.length}</div>*/}
-              <div class={"flex flex-1"}>
-                <div class={"flex-grow"}></div>
-                <div>{nodesPage.nodes?.length}</div>
-              </div>
-            </div>
-            <div class="flex gap-2 overflow-x-auto small-scrollbar" classList={{
-              'justify-center': isLoadingNodes(),
-              '-mb-2': nodesPage?.nodes?.length > 0 && (nodeSearch() || true) && nodesContainerElement?.offsetWidth < nodesContainerElement?.scrollWidth
-            }} ref={nodesContainerElement}>
-              <Show when={!isLoadingNodes()} fallback={<Loading class={"self-center"}
-                                                                style={{height: nodesContainerElement ? `${nodesContainerElement.offsetHeight}px` : 'auto'}}/>}>
-                <For each={nodesPage.nodes?.filter(n => {
-                  let value = (nodeSearch() ?? "").trim().toLowerCase();
-                  if (value == "") {
-                    return true;
-                  }
-                  return n.nodeId?.toLowerCase().includes(value)
-                    || n.appRunId?.toLowerCase().includes(value)
-                    || n.appBuildIds?.some(n => n?.some(n => n?.toLowerCase().includes(value)))
-                    || Object.keys(n.data ?? {}).some(key => {
-                      return n.data[key]?.toString()?.toLowerCase().includes(value);
-                    })
-                })} fallback={<div class={"flex justify-center items-center text-center flex-grow"}
-                                   style={{height: nodesContainerElement ? `${nodesContainerElement.offsetHeight}px` : 'auto'}}>空</div>}>
-                  {(n) => <NodeItem now={nodesPage.date} class={"box-border"} data={n}
-                                    isSelected={nodeSelection.isSelect(n.nodeId)}
-                                    onClick={() => nodeSelection.toggle(n.nodeId)}/>}
-                </For>
-              </Show>
-            </div>
-          </div>
-          <div class="flex flex-grow gap-3 overflow-hidden">
-            <TraceTreeInfoProvider rootContainerElement={rootContainerElement}
-                                   search={curSearch}
-                                   date={nodesPage.date}
-                                   filter={tracingTreeFilter}>
-              <div ref={setLeftElement} class="flex flex-col flex-grow gap-3 overflow-hidden">
-                {/*<div class="panel p-2 flex flex-row">*/}
-                {/*  <div>span 路径</div>*/}
-                {/*  <div>span fields</div>*/}
-                {/*</div>*/}
-                <div class="panel py-3 px-3 flex">
-                  <div class="flex flex-grow gap-3 items-center">
-                    <input placeholder={`${t("common:search")} (PostgreSQL Like Syntax)`}
-                           class={"outline-none flex-grow flex-shrink text-sm bg-gray-50 block"}
-                           style={{
-                             "padding": "8px",
-                             "margin": "-8px -4px",
-                             "max-width": '300px'
-                           }} onKeyDown={e => {
-                      if (e.key === "Enter") {
-                        setCurSearch((e.target as HTMLInputElement).value);
-                      }
-                    }}>SEARCH</input>
-                    {/*  <div>时间范围</div>*/}
-                    {/*  <div>预设</div>*/}
-                    {/*  /!*<div>保存预设</div>*!/*/}
-                    {/*  <div>高级过滤</div>*/}
-                    <div class={"flex-grow"}/>
-                    {/*<div class="flex items-center p-2 -my-2 rounded cursor-pointer -mr-2 select-none hover:bg-stone-100"*/}
-                    {/*     onClick={() => setShowAppFilter(n => !n)}>*/}
-                    {/*  <SwitchUI class={"h-4 mb-1"} checked={showAppFilter()}>*/}
-                    {/*    <SwitchControl class={"h-4 w-9"}>*/}
-                    {/*      <SwitchThumb class={"size-3"}/>*/}
-                    {/*    </SwitchControl>*/}
-                    {/*  </SwitchUI>*/}
-                    {/*  <span class="pl-2 text-sm">SHOW APP FILTER</span>*/}
-                    {/*</div>*/}
-                    {/*<div class="flex items-center p-2 -my-2 rounded cursor-pointer -mr-2 select-none hover:bg-stone-100"*/}
-                    {/*     onClick={() => setShowEvent(n => !n)}>*/}
-                    {/*  <SwitchUI class={"h-4 mb-1"} checked={showEvent()}>*/}
-                    {/*    <SwitchControl class={"h-4 w-9"}>*/}
-                    {/*      <SwitchThumb class={"size-3"}/>*/}
-                    {/*    </SwitchControl>*/}
-                    {/*  </SwitchUI>*/}
-                    {/*  <span class="pl-2 text-sm">Show Event</span>*/}
-                    {/*</div>*/}
-                    <div class="flex gap-[2px]  border-stone-50 flex-row  -my-2 items-center">
-                      <For each={[...ALL_LEVELS]}>
-                        {n => <div onClick={() => levelSection.toggleSingle(n)}
-                                   class="text-xsm border-y border-transparent text-gray-500 select-none   cursor-pointer font-bold p-2"
-                                   style={{
-                                     ...(levelSection.isSelect(n) ? {
-                                       // color: "black",
-                                       "border-color": getLevelColor(n),
-                                       "color": getLevelColor(n),
-                                       // "border-color": getLevelColor(n),
-                                     } : {
-                                       "color": getLevelColor(n),
-                                     })
-                                   }} classList={{
-                          "bg-stone-100": levelSection.isSelect(n),
-                          "hover:bg-stone-50": !levelSection.isSelect(n)
-                        }}>{n.toUpperCase()}</div>}
-                      </For>
-                    </div>
-                    {/*<div>*/}
-                    {/*  <div class="pb-2 text-sm">类型：</div>*/}
-                    {/*  <Select<string>*/}
-                    {/*    multiple placeholder={"全部"}*/}
-                    {/*    onChange={n => {*/}
-                    {/*      setSelectedKinds(n);*/}
-                    {/*    }}*/}
-                    {/*    value={selectedKinds()}*/}
-                    {/*    disallowEmptySelection={false}*/}
-                    {/*    options={TREE_KINDS}*/}
-                    {/*    itemComponent={(props) => {*/}
-                    {/*      return <SelectItem*/}
-                    {/*        item={props.item}>{props.item.textValue}</SelectItem>*/}
-                    {/*    }}*/}
-                    {/*  >*/}
-                    {/*    <SelectTrigger class="w-[180px]">*/}
-                    {/*      <SelectValue<string>*/}
-                    {/*        class="text-ellipsis overflow-hidden whitespace-nowrap pr-2">{(state) => {*/}
-                    {/*        let selectedOptions = state.selectedOptions();*/}
-                    {/*        if (selectedOptions.length == TREE_KINDS.length) {*/}
-                    {/*          return "全部";*/}
-                    {/*        } else {*/}
-                    {/*          return selectedOptions.toString()*/}
-                    {/*        }*/}
-                    {/*      }}</SelectValue>*/}
-                    {/*    </SelectTrigger>*/}
-                    {/*    <SelectContent/>*/}
-                    {/*  </Select>*/}
-                    {/*</div>*/}
-                    {/*<div>*/}
-                    {/*  <div class="pb-2 text-sm">级别：</div>*/}
-                    {/*  <Select<TracingLevel>*/}
-                    {/*    multiple placeholder={"全部"}*/}
-                    {/*    onChange={n => {*/}
-                    {/*      setSelectedLevels(n);*/}
-                    {/*    }}*/}
-                    {/*    value={selectedLevels()}*/}
-                    {/*    disallowEmptySelection={false}*/}
-                    {/*    options={ALL_LEVELS}*/}
-                    {/*    itemComponent={(props) => {*/}
-                    {/*      return <SelectItem class="" item={props.item}>*/}
-                    {/*        <span style={{background: getLevelColor(props.item.rawValue)}}*/}
-                    {/*              class="p-1 mr-2"/>*/}
-                    {/*        <span>{props.item.textValue}</span>*/}
-                    {/*      </SelectItem>*/}
-                    {/*    }}*/}
-                    {/*  >*/}
-                    {/*    <SelectTrigger class="w-[180px]">*/}
-                    {/*      <SelectValue<string>*/}
-                    {/*        class="text-ellipsis overflow-hidden whitespace-nowrap pr-2">{(state) => {*/}
-                    {/*        let selectedOptions = state.selectedOptions();*/}
-                    {/*        if (selectedOptions.length == ALL_LEVELS.length) {*/}
-                    {/*          return "全部";*/}
-                    {/*        } else {*/}
-                    {/*          return selectedOptions.toString()*/}
-                    {/*        }*/}
-                    {/*      }}</SelectValue>*/}
-                    {/*    </SelectTrigger>*/}
-                    {/*    <SelectContent/>*/}
-                    {/*  </Select>*/}
-                    {/*</div>*/}
-                    {/*<div class={"flex-grow"}/>*/}
-                    {/*<div>*/}
-                    {/*  <div class="pb-2 text-sm">日期显示：</div>*/}
-                    {/*  <Select<string>*/}
-                    {/*    value={"对齐到服务器"}*/}
-                    {/*    disallowEmptySelection={true}*/}
-                    {/*    options={["对齐到服务器", "本地", "距离App运行时间"]}*/}
-                    {/*    itemComponent={(props) => {*/}
-                    {/*      return <SelectItem item={props.item}>*/}
-                    {/*        {props.item.textValue}*/}
-                    {/*      </SelectItem>*/}
-                    {/*    }}*/}
-                    {/*  >*/}
-                    {/*    <SelectTrigger class="w-[180px]">*/}
-                    {/*      <SelectValue<string[]>*/}
-                    {/*        class="text-ellipsis overflow-hidden whitespace-nowrap pr-2">{(state) => {*/}
-                    {/*        return state.selectedOption().toString()*/}
-                    {/*      }}</SelectValue>*/}
-                    {/*    </SelectTrigger>*/}
-                    {/*    <SelectContent/>*/}
-                    {/*  </Select>*/}
-                    {/*</div>*/}
-                  </div>
+      <CurTracePath.Provider value={createSignal([])}>
+        <SelectedTreeItemProvider>
+          <div class="flex flex-col gap-3 overflow-hidden flex-grow">
+            <div class="panel flex flex-col p-2 gap-2  flex-grow-0">
+              <div class="flex flex-row border-b pb-2 gap-2 justify-between">
+                <div class={"flex flex-row flex-1"}>
+                  <For each={nodesPage.apps}>
+                    {n => <div
+                      class={"flex gap-1 text-nowrap items-center hover:bg-stone-100 cursor-pointer rounded px-2 py-1 -my-1"}
+                      onClick={() => {
+                        appSelection.toggle(n.id);
+                      }}>
+                      <Checkbox onClick={async (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        appSelection.toggle(n.id);
+                      }} checked={appSelection.isSelect(n.id)}/>
+                      <div class="text-sm">{n.name} ( {n.nodeCount} )</div>
+                    </div>}
+                  </For>
                 </div>
-
-                {/*<TraceTreeInfoProvider rootContainerElement={rootContainerElement}*/}
-                {/*                       selectedKinds={selectedKinds}*/}
-                {/*                       selectedLevels={selectedLevels}>*/}
-                {/*  <AppRunList></AppRunList>*/}
-                {/*  /!*<TracingTreeItemList ref={setRootContainerElement} layer={0} isEnd={false}*!/*/}
-                {/*  /!*                     spanTId={null}*!/*/}
-                {/*  /!*                     class="h-full flex-grow overflow-y-scroll"/>*!/*/}
-                {/*</TraceTreeInfoProvider>*/}
-                <div class="flex flex-col flex-grow overflow-hidden gap-3">
-                  {/*<AppList/>*/}
-
-                  <div class="panel py-2 overflow-hidden flex flex-col">
-                    <div class="flex border-b pb-2 items-center gap-2 px-2">
-                      <div class={"flex flex-row rounded overflow-hidden border-2 border-gray-100"}>
-                        <For each={SHOW_MODES}>
-                          {showMode => <div class={"py-1 px-2 test-xsm cursor-pointer"}
-                                            onClick={() => {
-                                              setTracingTreeFilter(produce(n => {
-                                                n.showMode = showMode;
-                                              }))
-                                            }} classList={{
-                            "hover:bg-stone-100": tracingTreeFilter.showMode != showMode,
-                            "bg-primary": tracingTreeFilter.showMode == showMode,
-                            "text-primary-foreground": tracingTreeFilter.showMode == showMode,
-                          }}>{showMode}</div>}
+                <input onChange={n => setNodeSearch(n.target.value)} placeholder={t("common:search")}
+                       class={"p-2 px-3 border-x -m-2 outline-none text-sm"}/>
+                {/*<div>{nodesPage.nodes.filter(n => n.stopTime == null).length}/{nodesPage.nodes?.length}</div>*/}
+                <div class={"flex flex-1"}>
+                  <div class={"flex-grow"}></div>
+                  <div>{nodesPage.nodes?.length}</div>
+                </div>
+              </div>
+              <div class="flex gap-2 overflow-x-auto small-scrollbar" classList={{
+                'justify-center': isLoadingNodes(),
+                '-mb-2': nodesPage?.nodes?.length > 0 && (nodeSearch() || true) && nodesContainerElement?.offsetWidth < nodesContainerElement?.scrollWidth
+              }} ref={nodesContainerElement}>
+                <Show when={!isLoadingNodes()} fallback={<Loading class={"self-center"}
+                                                                  style={{height: nodesContainerElement ? `${nodesContainerElement.offsetHeight}px` : 'auto'}}/>}>
+                  <For each={nodesPage.nodes?.filter(n => {
+                    let value = (nodeSearch() ?? "").trim().toLowerCase();
+                    if (value == "") {
+                      return true;
+                    }
+                    return n.nodeId?.toLowerCase().includes(value)
+                      || n.appRunId?.toLowerCase().includes(value)
+                      || n.appBuildIds?.some(n => n?.some(n => n?.toLowerCase().includes(value)))
+                      || Object.keys(n.data ?? {}).some(key => {
+                        return n.data[key]?.toString()?.toLowerCase().includes(value);
+                      })
+                  })} fallback={<div class={"flex justify-center items-center text-center flex-grow"}
+                                     style={{height: nodesContainerElement ? `${nodesContainerElement.offsetHeight}px` : 'auto'}}>空</div>}>
+                    {(n) => <NodeItem now={nodesPage.date} class={"box-border"} data={n}
+                                      isSelected={nodeSelection.isSelect(n.nodeId)}
+                                      onClick={() => nodeSelection.toggle(n.nodeId)}/>}
+                  </For>
+                </Show>
+              </div>
+            </div>
+            <div class="flex flex-grow gap-3 overflow-hidden">
+              <TraceTreeInfoProvider rootContainerElement={rootContainerElement}
+                                     search={curSearch}
+                                     date={nodesPage.date}
+                                     filter={tracingTreeFilter}>
+                <div ref={setLeftElement} class="flex flex-col flex-grow gap-3 overflow-hidden">
+                  {/*<div class="panel p-2 flex flex-row">*/}
+                  {/*  <div>span 路径</div>*/}
+                  {/*  <div>span fields</div>*/}
+                  {/*</div>*/}
+                  <div class="panel py-2 px-3 flex">
+                    <div class="flex flex-grow gap-3 items-stretch">
+                      <input placeholder={`${t("common:search")} (PostgreSQL Like Syntax)`}
+                             class={"outline-none flex-grow flex-shrink text-sm bg-gray-50 block"}
+                             style={{
+                               "padding": "8px",
+                               "margin": "-8px -4px",
+                               "max-width": '300px'
+                             }} onKeyDown={e => {
+                        if (e.key === "Enter") {
+                          setCurSearch((e.target as HTMLInputElement).value);
+                        }
+                      }}>SEARCH</input>
+                      {/*  <div>时间范围</div>*/}
+                      {/*  <div>预设</div>*/}
+                      {/*  /!*<div>保存预设</div>*!/*/}
+                      {/*  <div>高级过滤</div>*/}
+                      <div class={"flex-grow"}/>
+                      {/*<div class="flex items-center p-2 -my-2 rounded cursor-pointer -mr-2 select-none hover:bg-stone-100"*/}
+                      {/*     onClick={() => setShowAppFilter(n => !n)}>*/}
+                      {/*  <SwitchUI class={"h-4 mb-1"} checked={showAppFilter()}>*/}
+                      {/*    <SwitchControl class={"h-4 w-9"}>*/}
+                      {/*      <SwitchThumb class={"size-3"}/>*/}
+                      {/*    </SwitchControl>*/}
+                      {/*  </SwitchUI>*/}
+                      {/*  <span class="pl-2 text-sm">SHOW APP FILTER</span>*/}
+                      {/*</div>*/}
+                      {/*<div class="flex items-center p-2 -my-2 rounded cursor-pointer -mr-2 select-none hover:bg-stone-100"*/}
+                      {/*     onClick={() => setShowEvent(n => !n)}>*/}
+                      {/*  <SwitchUI class={"h-4 mb-1"} checked={showEvent()}>*/}
+                      {/*    <SwitchControl class={"h-4 w-9"}>*/}
+                      {/*      <SwitchThumb class={"size-3"}/>*/}
+                      {/*    </SwitchControl>*/}
+                      {/*  </SwitchUI>*/}
+                      {/*  <span class="pl-2 text-sm">Show Event</span>*/}
+                      {/*</div>*/}
+                      <div class="flex  border-stone-50 flex-row  -my-2 items-stretch">
+                        <For each={[...ALL_LEVELS]}>
+                          {n => <div onClick={() => levelSection.toggleSingle(n)}
+                                     class="text-xsm border-transparent text-gray-500 select-none flex items-center  cursor-pointer font-bold p-2"
+                                     title={levelSection.isSelect(n) ? "disable it" : "enable it"}
+                                     style={{
+                                       ...(levelSection.isSelect(n) ? {
+                                         // color: "black",
+                                         "border-color": getLevelColor(n),
+                                         "color": getLevelColor(n),
+                                         // "border-color": getLevelColor(n),
+                                       } : {
+                                         "color": getLevelColor(n),
+                                       })
+                                     }} classList={{
+                            "bg-stone-100": levelSection.isSelect(n),
+                            "hover:bg-stone-50": !levelSection.isSelect(n)
+                          }}>{n.toUpperCase()}</div>}
                         </For>
                       </div>
-                      <div class={"flex-grow"}/>
-                      {/*<div>滚动到底部</div>*/}
-                      {/*<select class="p-2 mr-2 hover:bg-stone-100" value={tracingTreeFilter.timeShowMode}*/}
-                      {/*        onChange={event => setTracingTreeFilter(produce(n => {*/}
-                      {/*          n.timeShowMode = event.target.value as TimeShowMode;*/}
-                      {/*        }))}>*/}
-                      {/*  <For each={TIME_SHOW_MODES}>*/}
-                      {/*    {n => <option class={""} value={n}>{n}</option>}*/}
-                      {/*  </For>*/}
-                      {/*</select>*/}
-                      {/*<div></div>*/}
+                      {/*<div>*/}
+                      {/*  <div class="pb-2 text-sm">类型：</div>*/}
+                      {/*  <Select<string>*/}
+                      {/*    multiple placeholder={"全部"}*/}
+                      {/*    onChange={n => {*/}
+                      {/*      setSelectedKinds(n);*/}
+                      {/*    }}*/}
+                      {/*    value={selectedKinds()}*/}
+                      {/*    disallowEmptySelection={false}*/}
+                      {/*    options={TREE_KINDS}*/}
+                      {/*    itemComponent={(props) => {*/}
+                      {/*      return <SelectItem*/}
+                      {/*        item={props.item}>{props.item.textValue}</SelectItem>*/}
+                      {/*    }}*/}
+                      {/*  >*/}
+                      {/*    <SelectTrigger class="w-[180px]">*/}
+                      {/*      <SelectValue<string>*/}
+                      {/*        class="text-ellipsis overflow-hidden whitespace-nowrap pr-2">{(state) => {*/}
+                      {/*        let selectedOptions = state.selectedOptions();*/}
+                      {/*        if (selectedOptions.length == TREE_KINDS.length) {*/}
+                      {/*          return "全部";*/}
+                      {/*        } else {*/}
+                      {/*          return selectedOptions.toString()*/}
+                      {/*        }*/}
+                      {/*      }}</SelectValue>*/}
+                      {/*    </SelectTrigger>*/}
+                      {/*    <SelectContent/>*/}
+                      {/*  </Select>*/}
+                      {/*</div>*/}
+                      {/*<div>*/}
+                      {/*  <div class="pb-2 text-sm">级别：</div>*/}
+                      {/*  <Select<TracingLevel>*/}
+                      {/*    multiple placeholder={"全部"}*/}
+                      {/*    onChange={n => {*/}
+                      {/*      setSelectedLevels(n);*/}
+                      {/*    }}*/}
+                      {/*    value={selectedLevels()}*/}
+                      {/*    disallowEmptySelection={false}*/}
+                      {/*    options={ALL_LEVELS}*/}
+                      {/*    itemComponent={(props) => {*/}
+                      {/*      return <SelectItem class="" item={props.item}>*/}
+                      {/*        <span style={{background: getLevelColor(props.item.rawValue)}}*/}
+                      {/*              class="p-1 mr-2"/>*/}
+                      {/*        <span>{props.item.textValue}</span>*/}
+                      {/*      </SelectItem>*/}
+                      {/*    }}*/}
+                      {/*  >*/}
+                      {/*    <SelectTrigger class="w-[180px]">*/}
+                      {/*      <SelectValue<string>*/}
+                      {/*        class="text-ellipsis overflow-hidden whitespace-nowrap pr-2">{(state) => {*/}
+                      {/*        let selectedOptions = state.selectedOptions();*/}
+                      {/*        if (selectedOptions.length == ALL_LEVELS.length) {*/}
+                      {/*          return "全部";*/}
+                      {/*        } else {*/}
+                      {/*          return selectedOptions.toString()*/}
+                      {/*        }*/}
+                      {/*      }}</SelectValue>*/}
+                      {/*    </SelectTrigger>*/}
+                      {/*    <SelectContent/>*/}
+                      {/*  </Select>*/}
+                      {/*</div>*/}
+                      {/*<div class={"flex-grow"}/>*/}
+                      {/*<div>*/}
+                      {/*  <div class="pb-2 text-sm">日期显示：</div>*/}
+                      {/*  <Select<string>*/}
+                      {/*    value={"对齐到服务器"}*/}
+                      {/*    disallowEmptySelection={true}*/}
+                      {/*    options={["对齐到服务器", "本地", "距离App运行时间"]}*/}
+                      {/*    itemComponent={(props) => {*/}
+                      {/*      return <SelectItem item={props.item}>*/}
+                      {/*        {props.item.textValue}*/}
+                      {/*      </SelectItem>*/}
+                      {/*    }}*/}
+                      {/*  >*/}
+                      {/*    <SelectTrigger class="w-[180px]">*/}
+                      {/*      <SelectValue<string[]>*/}
+                      {/*        class="text-ellipsis overflow-hidden whitespace-nowrap pr-2">{(state) => {*/}
+                      {/*        return state.selectedOption().toString()*/}
+                      {/*      }}</SelectValue>*/}
+                      {/*    </SelectTrigger>*/}
+                      {/*    <SelectContent/>*/}
+                      {/*  </Select>*/}
+                      {/*</div>*/}
                     </div>
-                    <Suspense fallback={<LoadingPanel/>}>
-                      <Switch>
-                        <Match when={tracingTreeFilter.showMode == "Tree"}>
-                          <TracingTreeItemList ref={setRootContainerElement} layer={0}
-                                               isEnd={() => false}
-                                               spanTId={null}
-                                               class="overflow-hidden overflow-y-scroll"/>
-                        </Match>
-                        <Match when={tracingTreeFilter.showMode == "AppTable"}>
-                          <TracingTreeItemList ref={setRootContainerElement} isAppTable={true}
-                                               layer={0} isEnd={() => false}
-                                               spanTId={null}
-                                               class="overflow-hidden overflow-y-scroll"/>
-                        </Match>
-                        <Match when={tracingTreeFilter.showMode == "Table"}>
-                          <TracingRecordTable ref={setRootContainerElement}/>
-                        </Match>
-                      </Switch>
-                    </Suspense>
+                  </div>
+
+                  {/*<TraceTreeInfoProvider rootContainerElement={rootContainerElement}*/}
+                  {/*                       selectedKinds={selectedKinds}*/}
+                  {/*                       selectedLevels={selectedLevels}>*/}
+                  {/*  <AppRunList></AppRunList>*/}
+                  {/*  /!*<TracingTreeItemList ref={setRootContainerElement} layer={0} isEnd={false}*!/*/}
+                  {/*  /!*                     spanTId={null}*!/*/}
+                  {/*  /!*                     class="h-full flex-grow overflow-y-scroll"/>*!/*/}
+                  {/*</TraceTreeInfoProvider>*/}
+                  <div class="flex flex-col flex-grow overflow-hidden gap-3">
+                    {/*<AppList/>*/}
+
+                    <div class="panel py-2 overflow-hidden flex flex-col">
+                      <div class="flex justify-between border-b pb-2 items-center gap-2 px-2">
+                        <div class={"flex-grow"}>
+                          {(() => {
+                            let [curTracePath, setCurTracePath] = useContext(CurTracePath);
+                            return <TracePath hasRoot={true} class={"-my-1"} path={curTracePath()}
+                                              onClickItem={(path) => setCurTracePath(path)}></TracePath>
+                          })()}
+                        </div>
+                        <div class={"flex flex-row rounded overflow-hidden border-2 border-gray-100"}>
+                          <For each={SHOW_MODES}>
+                            {showMode => <div class={"py-1 px-2 test-xsm cursor-pointer"}
+                                              onClick={() => {
+                                                setTracingTreeFilter(produce(n => {
+                                                  n.showMode = showMode;
+                                                }))
+                                              }} classList={{
+                              "hover:bg-stone-100": tracingTreeFilter.showMode != showMode,
+                              "bg-primary": tracingTreeFilter.showMode == showMode,
+                              "text-primary-foreground": tracingTreeFilter.showMode == showMode,
+                            }}>{showMode}</div>}
+                          </For>
+                        </div>
+                        {/*<div>滚动到底部</div>*/}
+                        {/*<select class="p-2 mr-2 hover:bg-stone-100" value={tracingTreeFilter.timeShowMode}*/}
+                        {/*        onChange={event => setTracingTreeFilter(produce(n => {*/}
+                        {/*          n.timeShowMode = event.target.value as TimeShowMode;*/}
+                        {/*        }))}>*/}
+                        {/*  <For each={TIME_SHOW_MODES}>*/}
+                        {/*    {n => <option class={""} value={n}>{n}</option>}*/}
+                        {/*  </For>*/}
+                        {/*</select>*/}
+                        {/*<div></div>*/}
+                      </div>
+                      <Suspense fallback={<LoadingPanel/>}>
+                        <Switch>
+                          <Match when={tracingTreeFilter.showMode == "Tree"}>
+                            <Show when={useContext(CurTracePath)[0]()} keyed={true}>
+                              {(path: TracePathItem[]) => {
+                                let spanTId = path.length > 0 ? path.at(-1).record.record.spanTId : null;
+                                let isEnd = () => path.length > 0 ? path.at(-1).record.end != null : false;
+                                let appRunId = path.length > 0 ? path[0].record.record.appRunId : null;
+                                return <TracingTreeItemList ref={setRootContainerElement} layer={path.length}
+                                                            isEnd={isEnd} path={path}
+                                                            spanTId={spanTId} appRunId={appRunId}
+                                                            class="overflow-hidden overflow-y-scroll"/>
+                              }}
+                            </Show>
+                          </Match>
+                          <Match when={tracingTreeFilter.showMode == "Flatten"}>
+                            <TracingRecordTable ref={setRootContainerElement}/>
+                          </Match>
+                        </Switch>
+                      </Suspense>
+                    </div>
                   </div>
                 </div>
-              </div>
-              <Show when={useSelectedTreeItem()[0]()} keyed>
-                {n => <SelectedDetail class={"flex-grow-0"} style={{"max-height": `${leftElementHeight()}px`}}
-                                      data={n}/>}
-              </Show>
-            </TraceTreeInfoProvider>
+                <Show when={useCurSelectedTreeItem().selected()} keyed>
+                  {n => <SelectedDetail class={"flex-grow-0"} style={{"max-height": `${leftElementHeight()}px`}}
+                                        data={n}/>}
+                </Show>
+              </TraceTreeInfoProvider>
+            </div>
           </div>
-        </div>
-      </SelectedTreeItemProvider>
+        </SelectedTreeItemProvider>
+      </CurTracePath.Provider>
     </Show>
   )
 }
@@ -661,7 +700,7 @@ function PropertyExpandableRow(allProps: {
   return (
     <>
       <tr {...rootProps}
-          class={cn("leading-8 border-x border-b border-gray-400 border-b-gray-100 hover:bg-stone-50", rootProps.class)}
+          class={cn("leading-8 border-b bg-gray-50 border-gray-400 border-b-gray-100 hover:bg-stone-50", rootProps.class)}
           onClick={() => setIsExpand(n => !n)}>
         <td
           class={cn("w-[1%] select-none text-xsm font-bold pl-1 pr-1 min-w-[100px] text-left whitespace-nowrap", props.labelContainerClass)}>
@@ -694,12 +733,50 @@ function PropertyTable(allProps: {} & HTMLAttributes<HTMLTableElement>) {
   )
 }
 
-function SelectedDetail(allProps: { data: TracingTreeRecordDto } & HTMLAttributes<HTMLDivElement>) {
+function TracePath(allProps: {
+  path: TracePathItem[],
+  cur?: TracingTreeRecordDto,
+  hasRoot?: boolean,
+  onClickItem?: (_item: TracePathItem[]) => void,
+} & HTMLAttributes<HTMLDivElement>) {
+  let [props, rootProps] = splitProps(allProps, ['path', 'cur', 'hasRoot', 'children', 'onClickItem']);
+  let cr = () =>
+    <div class={"text-sm flex items-center cursor-pointer -mx-1 py-2 px-2 hover:bg-stone-50"}>
+      <ChevronRight size={16} class={""} strokeWidth={2}></ChevronRight>
+    </div>;
+  return (
+    <div {...rootProps} class={cn("inline-flex flex-grow-0 px-2 items-stretch", allProps.class)}>
+      <Show when={props.hasRoot}>
+        <div class={"text-sm cursor-pointer py-2 px-2 hover:bg-stone-50 text-nowrap overflow-hidden text-ellipsis"}
+             onClick={props.onClickItem ? () => props.onClickItem([]) : null}>
+          Root
+        </div>
+      </Show>
+      {cr()}
+      <For each={props.path}>
+        {(n, index) => <>
+          <div class={"text-sm cursor-pointer py-2 px-2 hover:bg-stone-50 text-nowrap overflow-hidden text-ellipsis"}
+               onClick={props.onClickItem ? () => props.onClickItem(props.path.filter((n, i) => index() >= i)) : null}>{n.record?.record?.name}</div>
+          {cr()}
+        </>}
+      </For>
+      <Show when={props.cur}>
+        <div class={"text-sm flex items-center py-1 px-1 text-nowrap overflow-hidden text-ellipsis"}>
+          {props.cur.record.name}
+        </div>
+        {EXPANDABLE_KINDS.includes(props.cur.record.kind) && cr()}
+      </Show>
+    </div>
+  )
+}
+
+function SelectedDetail(allProps: { data: SelectedTreeItem } & HTMLAttributes<HTMLDivElement>) {
   let [props, rootProps] = splitProps(allProps, ['data', 'children']);
 
-  type Tab = "Base" | "Enter List" | "Field Record";
-  let tabs: Tab[] = ["Base"];
-  switch (props.data.record.kind) {
+  let record = props.data.record;
+  type Tab = "Info" | "Enter List" | "Field Record";
+  let tabs: Tab[] = ["Info"];
+  switch (record.record.kind) {
     case TracingKind.SpanCreate: {
       tabs.push("Enter List");
       tabs.push("Field Record");
@@ -710,157 +787,172 @@ function SelectedDetail(allProps: { data: TracingTreeRecordDto } & HTMLAttribute
     setCurTab(tabs[0]);
   }
   let isCurTab = createSelector(curTab);
+  let [, setCurTracePath] = useContext(CurTracePath);
   return (
-    <div {...rootProps}
-         class={cn("panel p-2 flex flex-col self-start flex-shrink-0 w-[550px] max-w-[900px]", rootProps.class)}>
-      <Show when={tabs.length > 1}>
-        <div class={"flex gap-1 mb-1 px-2 -mx-2 bg-gray-50"}>
-          <For each={tabs}>
-            {n => <div class={"border-t cursor-pointer p-2 px-3 "} classList={{
-              "hover:bg-background": !isCurTab(n),
-              "bg-background": isCurTab(n),
-              "border-t-primary": isCurTab(n),
-            }} onClick={() => setCurTab(n)}>{n}</div>}
-          </For>
+    <div class="flex flex-col gap-3  w-[550px] max-w-[900px]">
+      <div class={"flex items-stretch gap-2 justify-between"}>
+        <TracePath class={"panel overflow-hidden"} path={props.data.path} cur={props.data.record}></TracePath>
+        <div
+          class={"px-4 py-2 panel flex-shrink-0 items-center text-sm justify-center flex text-center hover:bg-stone-50 cursor-pointer"}
+          onClick={() => {
+            setCurTracePath(EXPANDABLE_KINDS.includes(props.data.record.record.kind) ? [...props.data.path, {
+              record: props.data.record,
+              path: props.data.path
+            }] : props.data.path)
+          }}>Go
         </div>
-      </Show>
-      <div class={"flex-grow overflow-hidden -mx-2 flex flex-col overflow-y-auto"}>
-        <Switch>
-          <Match when={curTab() == "Base"}>
-            <PropertyTable>
-              <PropertyRow label={"Id"}>{props.data.record.id}</PropertyRow>
-              <PropertyRow label={"Content"}>{props.data.record.name}</PropertyRow>
-              <PropertyRow
-                label={"RecordTime"}>{props.data.record.recordTime?.toLocaleString()}</PropertyRow>
-              <PropertyRow label={"NodeId"}>{props.data.record.nodeId}</PropertyRow>
-              <PropertyRow
-                label={"ParentSpanTId"}>{props.data.record.parentSpanTId ?? NULL_STR}</PropertyRow>
-              <Show
-                when={![TracingKind.AppStart, TracingKind.AppStop as TracingKind].includes(props.data.record.kind)}>
-                <PropertyExpandableRow defaultIsExpand={false} label={"CodeInfo"}
-                                       tailing={<div>{props.data.record.positionInfo}</div>}>
-                  <PropertyTable class={""}>
-                    <PropertyRow label={"Target"}>{props.data.record.target}</PropertyRow>
-                    <PropertyRow label={"ModulePath"}>{props.data.record.modulePath}</PropertyRow>
-                    <PropertyRow
-                      label={"PositionInfo"}>{props.data.record.positionInfo}</PropertyRow>
-                    {/*<PropertyRow label={"ParentSpanId"}>{props.data.record.parentId}</PropertyRow>*/}
-                  </PropertyTable>
-                </PropertyExpandableRow>
-              </Show>
-              <Switch>
-                <Match when={props.data.record.kind == TracingKind.SpanCreate}>
-                  <PropertyExpandableRow childrenContainerClass={""} defaultIsExpand={true} label={"SpanInfo"}>
-                    <PropertyTable class={""}>
-                      <Show when={props.data.record.spanIdIsStable}>
-                        <PropertyRow
-                          label={"IsStable"}>{props.data.record.spanIdIsStable}</PropertyRow>
-                      </Show>
-                      <PropertyRow label={"SpanId"}>{props.data.record.spanId}</PropertyRow>
-                      {/*<PropertyRow label={"ParentSpanId"}>{props.data.record.parentId}</PropertyRow>*/}
-                    </PropertyTable>
-                  </PropertyExpandableRow>
-                  <PropertyExpandableRow childrenContainerClass={""} defaultIsExpand={true} label={"SpanRunInfo"}>
-                    <PropertyTable class={""}>
-                      <PropertyRow
-                        label={"CreateRecordId"}>{props.data.record.id}</PropertyRow>
-                      <PropertyRow
-                        label={"SpanTId"}>{props.data.record.spanTId ?? NULL_STR}</PropertyRow>
-                      <PropertyRow
-                        label={"ParentSpanTId"}>{props.data.record.parentSpanTId ?? NULL_STR}</PropertyRow>
-                      <Show
-                        when={(props.data.variant as TracingTreeRecordVariantDtoOneOf)?.spanRun}>
-                        {n => <>
-                          <PropertyRow
-                            label={"TotalBusyDuration"}>{n().busyDuration != null ? humanizeDuration(n().busyDuration * 1000, durationOptions) : NULL_STR}</PropertyRow>
-                          <PropertyRow
-                            label={"TotalIdleDuration"}>{n().idleDuration != null ? humanizeDuration(n().idleDuration * 1000, durationOptions) : NULL_STR}</PropertyRow>
-                        </>}
-                      </Show>
-                    </PropertyTable>
-                  </PropertyExpandableRow>
-                  <PropertyExpandableRow childrenContainerClass={""} defaultIsExpand={true} label={"SpanEndInfo"}>
-                    <PropertyTable class={""}>
-                      <Show
-                        when={(props.data.variant as TracingTreeRecordVariantDtoOneOf)?.spanRun}>
-                        {n => <>
-                          <PropertyRow
-                            label={"EndDate"}>{String(props.data.end?.endDate.toLocaleString())}</PropertyRow>
-                          <Show when={props.data.end?.exceptionEnd != null}>
-                            <PropertyRow
-                              label={"ExceptionEnd"}>{String(props.data.end?.exceptionEnd)}</PropertyRow>
-                          </Show>
-                          <PropertyRow
-                            label={"CloseRecordId"}>{n().closeRecordId ?? NULL_STR}</PropertyRow>
-                        </>}
-                      </Show>
-                    </PropertyTable>
-                  </PropertyExpandableRow>
-                  <PropertyExpandableRow defaultIsExpand={true} label={"SpanLatestRecordFields"}>
-                    <Show
-                      when={(props.data.variant as TracingTreeRecordVariantDtoOneOf)?.spanRun}>
-                      {n => <PropertyTable class={""}>
-                        <TracingFields object={n().fields}></TracingFields>
-                      </PropertyTable>}
-                    </Show>
-                  </PropertyExpandableRow>
-                </Match>
-              </Switch>
-              <Show when={Object.keys(props.data.record.fields ?? {}).length != 0}>
-                <PropertyExpandableRow
-                  defaultIsExpand={true}
-                  label={"Fields"}>
-                  <PropertyTable class={""}>
-                    <TracingFields object={props.data.record.fields}></TracingFields>
-                  </PropertyTable>
-                </PropertyExpandableRow></Show>
-            </PropertyTable>
-            <PropertyExpandableRow childrenContainerClass={""} defaultIsExpand={false} label={"Other"}>
-              <PropertyTable class={""}>
-                <PropertyRow label={"ParentId"}>{props.data.record.parentId ?? NULL_STR}</PropertyRow>
-                <PropertyRow label={"Kind"}>{props.data.record.kind}</PropertyRow>
-                <PropertyRow label={"Level"}>{props.data.record.level}</PropertyRow>
-                <PropertyRow
-                  label={"SpanTId"}>{props.data.record.spanTId ?? NULL_STR}</PropertyRow>
-                <PropertyRow
-                  label={"CreationTime"}>{props.data.record.creationTime?.toLocaleString()}</PropertyRow>
-                {/*<PropertyRow label={"ParentSpanId"}>{props.data.record.parentId}</PropertyRow>*/}
-              </PropertyTable>
-            </PropertyExpandableRow>
-            <PropertyExpandableRow childrenContainerClass={""} defaultIsExpand={false} label={"AppInfo"}>
-              <PropertyTable class={""}>
-                <PropertyRow label={"AppId"}>{props.data.record.appId}</PropertyRow>
-                <PropertyRow label={"AppVersion"}>{props.data.record.appVersion}</PropertyRow>
-                <PropertyRow label={"AppRunId"}>{props.data.record.appRunId}</PropertyRow>
-                {/*<PropertyRow label={"ParentSpanId"}>{props.data.record.parentId}</PropertyRow>*/}
-              </PropertyTable>
-            </PropertyExpandableRow>
-          </Match>
-          <Match when={curTab() == "Enter List"}>
-            <TracingSpanEnterList
-              isEnd={props.data.end?.endDate != null} appRunId={props.data.record.appRunId}
-              parentSpanTId={props.data.record.spanTId}/>
-          </Match>
-          <Match when={curTab() == "Field Record"}>
-            <TracingSpanFieldList
-              isEnd={props.data.end?.endDate != null} appRunId={props.data.record.appRunId}
-              parentSpanTId={props.data.record.parentSpanTId}/>
-          </Match>
-        </Switch>
       </div>
-      {/*<div class={"py-2 px-2 -mx-2 font-bold border-b border-b-gray-300"}>Record Property</div>*/}
+      <div {...rootProps}
+           class={cn("panel flex-grow p-2 flex flex-col self-start flex-shrink-0 w-full", rootProps.class)}>
+        <Show when={tabs.length > 1}>
+          <div class={"flex gap-1 mb-1 px-2 -mx-2 bg-gray-50"}>
+            <For each={tabs}>
+              {n => <div class={"border-t-2 cursor-pointer p-2 px-3 "} classList={{
+                "hover:bg-background": !isCurTab(n),
+                "bg-background": isCurTab(n),
+                "border-t-primary": isCurTab(n),
+              }} onClick={() => setCurTab(n)}>{n}</div>}
+            </For>
+          </div>
+        </Show>
+        <div class={"flex-grow overflow-hidden -mx-2 flex flex-col overflow-y-auto"}>
+          <Switch>
+            <Match when={curTab() == "Info"}>
+              <PropertyTable>
+                <PropertyRow label={"Id"}>{record.record.id}</PropertyRow>
+                <PropertyRow label={"Content"}>{record.record.name}</PropertyRow>
+                <PropertyRow
+                  label={"RecordTime"}>{record.record.recordTime?.toLocaleString()}</PropertyRow>
+                <PropertyRow label={"NodeId"}>{record.record.nodeId}</PropertyRow>
+                <PropertyRow
+                  label={"ParentSpanTId"}>{record.record.parentSpanTId ?? NULL_STR}</PropertyRow>
+                <Show
+                  when={![TracingKind.AppStart, TracingKind.AppStop as TracingKind].includes(record.record.kind)}>
+                  <PropertyExpandableRow defaultIsExpand={false} label={"CodeInfo"}
+                                         tailing={<div>{record.record.positionInfo}</div>}>
+                    <PropertyTable class={""}>
+                      <PropertyRow label={"Target"}>{record.record.target}</PropertyRow>
+                      <PropertyRow label={"ModulePath"}>{record.record.modulePath}</PropertyRow>
+                      <PropertyRow
+                        label={"PositionInfo"}>{record.record.positionInfo}</PropertyRow>
+                      {/*<PropertyRow label={"ParentSpanId"}>{record.record.parentId}</PropertyRow>*/}
+                    </PropertyTable>
+                  </PropertyExpandableRow>
+                </Show>
+                <Switch>
+                  <Match when={record.record.kind == TracingKind.SpanCreate}>
+                    <PropertyExpandableRow childrenContainerClass={""} defaultIsExpand={true} label={"SpanInfo"}>
+                      <PropertyTable class={""}>
+                        <Show when={record.record.spanIdIsStable}>
+                          <PropertyRow
+                            label={"IsStable"}>{record.record.spanIdIsStable}</PropertyRow>
+                        </Show>
+                        <PropertyRow label={"SpanId"}>{record.record.spanId}</PropertyRow>
+                        {/*<PropertyRow label={"ParentSpanId"}>{record.record.parentId}</PropertyRow>*/}
+                      </PropertyTable>
+                    </PropertyExpandableRow>
+                    <PropertyExpandableRow childrenContainerClass={""} defaultIsExpand={true} label={"SpanRunInfo"}>
+                      <PropertyTable class={""}>
+                        <PropertyRow
+                          label={"CreateRecordId"}>{record.record.id}</PropertyRow>
+                        <PropertyRow
+                          label={"SpanTId"}>{record.record.spanTId ?? NULL_STR}</PropertyRow>
+                        <PropertyRow
+                          label={"ParentSpanTId"}>{record.record.parentSpanTId ?? NULL_STR}</PropertyRow>
+                        <Show
+                          when={(record.variant as TracingTreeRecordVariantDtoOneOf)?.spanRun}>
+                          {n => <>
+                            <PropertyRow
+                              label={"TotalBusyDuration"}>{n().busyDuration != null ? humanizeDuration(n().busyDuration * 1000, durationOptions) : NULL_STR}</PropertyRow>
+                            <PropertyRow
+                              label={"TotalIdleDuration"}>{n().idleDuration != null ? humanizeDuration(n().idleDuration * 1000, durationOptions) : NULL_STR}</PropertyRow>
+                          </>}
+                        </Show>
+                      </PropertyTable>
+                    </PropertyExpandableRow>
+                    <PropertyExpandableRow childrenContainerClass={""} defaultIsExpand={true} label={"SpanEndInfo"}>
+                      <PropertyTable class={""}>
+                        <Show
+                          when={(record.variant as TracingTreeRecordVariantDtoOneOf)?.spanRun}>
+                          {n => <>
+                            <PropertyRow
+                              label={"EndDate"}>{String(record.end?.endDate.toLocaleString())}</PropertyRow>
+                            <Show when={record.end?.exceptionEnd != null}>
+                              <PropertyRow
+                                label={"ExceptionEnd"}>{String(record.end?.exceptionEnd)}</PropertyRow>
+                            </Show>
+                            <PropertyRow
+                              label={"CloseRecordId"}>{n().closeRecordId ?? NULL_STR}</PropertyRow>
+                          </>}
+                        </Show>
+                      </PropertyTable>
+                    </PropertyExpandableRow>
+                    <PropertyExpandableRow defaultIsExpand={true} label={"SpanLatestRecordFields"}>
+                      <Show
+                        when={(record.variant as TracingTreeRecordVariantDtoOneOf)?.spanRun}>
+                        {n => <PropertyTable class={""}>
+                          <TracingFields object={n().fields}></TracingFields>
+                        </PropertyTable>}
+                      </Show>
+                    </PropertyExpandableRow>
+                  </Match>
+                </Switch>
+                <Show when={Object.keys(record.record.fields ?? {}).length != 0}>
+                  <PropertyExpandableRow
+                    defaultIsExpand={true}
+                    label={"Fields"}>
+                    <PropertyTable class={""}>
+                      <TracingFields object={record.record.fields}></TracingFields>
+                    </PropertyTable>
+                  </PropertyExpandableRow></Show>
+              </PropertyTable>
+              <PropertyExpandableRow childrenContainerClass={""} defaultIsExpand={false} label={"Other"}>
+                <PropertyTable class={""}>
+                  <PropertyRow label={"ParentId"}>{record.record.parentId ?? NULL_STR}</PropertyRow>
+                  <PropertyRow label={"Kind"}>{record.record.kind}</PropertyRow>
+                  <PropertyRow label={"Level"}>{record.record.level}</PropertyRow>
+                  <PropertyRow
+                    label={"SpanTId"}>{record.record.spanTId ?? NULL_STR}</PropertyRow>
+                  <PropertyRow
+                    label={"CreationTime"}>{record.record.creationTime?.toLocaleString()}</PropertyRow>
+                  {/*<PropertyRow label={"ParentSpanId"}>{record.record.parentId}</PropertyRow>*/}
+                </PropertyTable>
+              </PropertyExpandableRow>
+              <PropertyExpandableRow childrenContainerClass={""} defaultIsExpand={false} label={"AppInfo"}>
+                <PropertyTable class={""}>
+                  <PropertyRow label={"AppId"}>{record.record.appId}</PropertyRow>
+                  <PropertyRow label={"AppVersion"}>{record.record.appVersion}</PropertyRow>
+                  <PropertyRow label={"AppRunId"}>{record.record.appRunId}</PropertyRow>
+                  {/*<PropertyRow label={"ParentSpanId"}>{record.record.parentId}</PropertyRow>*/}
+                </PropertyTable>
+              </PropertyExpandableRow>
+            </Match>
+            <Match when={curTab() == "Enter List"}>
+              <TracingSpanEnterList
+                isEnd={record.end?.endDate != null} appRunId={record.record.appRunId}
+                parentSpanTId={record.record.spanTId}/>
+            </Match>
+            <Match when={curTab() == "Field Record"}>
+              <TracingSpanFieldList
+                isEnd={record.end?.endDate != null} appRunId={record.record.appRunId}
+                parentSpanTId={record.record.parentSpanTId}/>
+            </Match>
+          </Switch>
+        </div>
+        {/*<div class={"py-2 px-2 -mx-2 font-bold border-b border-b-gray-300"}>Record Property</div>*/}
 
 
-      {/*  /!*<Show when={selected().record.kind == "SPAN_CREATE"}>*!/*/}
-      {/*  /!*<TracingSpanFieldList*!/*/}
-      {/*  /!*  isEnd={selected().span.close_info?.span_close_time != null} appRunId={appRunId}*!/*/}
-      {/*  /!*  spanTId={selected().record.spanTId}/>*!/*/}
-      {/*  /!*<TracingSpanEnterList*!/*/}
-      {/*  /!*  isEnd={selected().span.close_info?.span_close_time != null} appRunId={appRunId}*!/*/}
-      {/*  /!*  spanTId={selected().record.spanTId}/>*!/*/}
-      {/*  /!*</Show>*!/*/}
-      {/*  </tbody>*/}
-      {/*</table>*/}
+        {/*  /!*<Show when={selected().record.kind == "SPAN_CREATE"}>*!/*/}
+        {/*  /!*<TracingSpanFieldList*!/*/}
+        {/*  /!*  isEnd={selected().span.close_info?.span_close_time != null} appRunId={appRunId}*!/*/}
+        {/*  /!*  spanTId={selected().record.spanTId}/>*!/*/}
+        {/*  /!*<TracingSpanEnterList*!/*/}
+        {/*  /!*  isEnd={selected().span.close_info?.span_close_time != null} appRunId={appRunId}*!/*/}
+        {/*  /!*  spanTId={selected().record.spanTId}/>*!/*/}
+        {/*  /!*</Show>*!/*/}
+        {/*  </tbody>*/}
+        {/*</table>*/}
+      </div>
     </div>
   )
 }
@@ -908,13 +1000,13 @@ function TracingSpanEnterList(all_props: {
         <div {...rootProps} class={cn("flex-grow overflow-hidden overflow-y-auto py-2", rootProps.class)}
              ref={elementRef}>
           <Show
-            when={!data().more_loading && !actions.notMoreData()}>
+            when={!data().more_loading && !actions.notMoreOlderData()}>
             <Button variant={'ghost'} class={"flex-shrink-0"} size="sm" ref={fetchMoreMarketElement}
                     onClick={async () => {
                       // let element = (fetchMoreMarketElement as HTMLElement).nextElementSibling
                       let rc = traceTreeInfo.rootContainerElement();
                       let scrollBottom = rc.scrollHeight - rc.scrollTop;
-                      actions.fetchMore(data().records[0].record.id);
+                      actions.fetchMoreOlder(data().records[0].record.id);
                       rc.scrollTo({
                         top: rc.scrollHeight - scrollBottom
                       })
@@ -933,6 +1025,25 @@ function TracingSpanEnterList(all_props: {
               </Show>
             </div>}
           </For>
+
+          <Show
+            when={!data().is_end}>
+            <Button variant={'ghost'} class={"flex-shrink-0"} size="sm" ref={fetchMoreMarketElement}
+                    onClick={async () => {
+                      // let element = (fetchMoreMarketElement as HTMLElement).nextElementSibling
+                      // let rc = traceTreeInfo.rootContainerElement();
+                      // let scrollBottom = rc.scrollHeight - rc.scrollTop;
+                      actions.fetchMore(data().records.at(-1).record.id);
+                      // rc.scrollTo({
+                      //   top: rc.scrollHeight - scrollBottom
+                      // })
+                    }}>
+              {t("common:loadMore")}
+            </Button>
+            <Show when={data().more_loading}>
+              <Loading/>
+            </Show>
+          </Show>
         </div>
       </Show>
     </Suspense>
@@ -986,13 +1097,13 @@ function TracingSpanFieldList(all_props: {
              ref={elementRef}>
 
           <Show
-            when={!data().more_loading && !actions.notMoreData()}>
+            when={!data().more_loading && !actions.notMoreOlderData()}>
             <Button variant={'ghost'} class={"flex-shrink-0"} size="sm" ref={fetchMoreMarketElement}
                     onClick={async () => {
                       // let element = (fetchMoreMarketElement as HTMLElement).nextElementSibling
                       let rc = traceTreeInfo.rootContainerElement();
                       let scrollBottom = rc.scrollHeight - rc.scrollTop;
-                      actions.fetchMore(data().records[0].record.id);
+                      actions.fetchMoreOlder(data().records[0].record.id);
                       rc.scrollTo({
                         top: rc.scrollHeight - scrollBottom
                       })
@@ -1001,15 +1112,34 @@ function TracingSpanFieldList(all_props: {
             </Button>
           </Show>
           <For each={data().records}>
-            {item2 => <PropertyExpandableRow class={"mt-1"} defaultIsExpand={true} label={`Record Fields`}
-                                             tailing={<div class={"text-right text-xsm mr-2"}>
-                                               {item.record.recordTime?.toLocaleString()}
-                                             </div>} childrenContainerContainerClass={"table"}>
+            {item => <PropertyExpandableRow class={"mt-1"} defaultIsExpand={true} label={`Record Fields`}
+                                            tailing={<div class={"text-right text-xsm mr-2"}>
+                                              {item.record.recordTime?.toLocaleString()}
+                                            </div>} childrenContainerContainerClass={"table"}>
               <PropertyTable class={""}>
                 <TracingFields object={item.record.fields}></TracingFields>
               </PropertyTable>
             </PropertyExpandableRow>}
           </For>
+
+          <Show
+            when={!data().is_end}>
+            <Button variant={'ghost'} class={"flex-shrink-0"} size="sm" ref={fetchMoreMarketElement}
+                    onClick={async () => {
+                      // let element = (fetchMoreMarketElement as HTMLElement).nextElementSibling
+                      // let rc = traceTreeInfo.rootContainerElement();
+                      // let scrollBottom = rc.scrollHeight - rc.scrollTop;
+                      actions.fetchMore(data().records.at(-1).record.id);
+                      // rc.scrollTo({
+                      //   top: rc.scrollHeight - scrollBottom
+                      // })
+                    }}>
+              {t("common:loadMore")}
+            </Button>
+            <Show when={data().more_loading}>
+              <Loading/>
+            </Show>
+          </Show>
         </div>
       </Show>
     </Suspense>
@@ -1046,12 +1176,30 @@ function TracingFields(allProps: { object: object }) {
 //     <TracingTreeItemList spanTId={parentSpanTId} appRunId={appRunId}></TracingTreeItemList>
 //   )
 // }
-function useSelectedTreeItem() {
+
+export interface SelectedTreeItem {
+  record: TracingTreeRecordDto;
+  path: TracePathItem[];
+}
+
+export interface CurSelectedTreeItemContext {
+  selected: Accessor<SelectedTreeItem>,
+  setSelected: Setter<SelectedTreeItem>,
+  isSelected: (_key: number) => boolean,
+}
+
+function useCurSelectedTreeItem(): CurSelectedTreeItemContext {
   const context = useContext(CurSelectedTreeItem)
   if (!context) {
     throw new Error("useSelectedTreeItem: cannot find a SelectedTreeItem")
   }
-  return context
+
+  let isSelected = createSelector(() => context[0]()?.record.record.id, (a, b) => a != null && b != null && a == b)
+  return {
+    selected: context[0],
+    isSelected,
+    setSelected: context[1]
+  }
 }
 
 function scrollToBottomIfNeed(element: HTMLElement) {
@@ -1068,11 +1216,53 @@ function scrollToBottomIfNeed(element: HTMLElement) {
   }
 }
 
+// function OfflineAppRunList() {
+//   return (
+//     <div>
+//       {moreBtn()}
+//       <Key each={data().records?.filter(n => n.end != null).map((n, i) => {
+//         let r = {
+//           item: n,
+//           defaultIsExpand: props.layer == 0 && (data().records.length - 1) == i && first,
+//           i
+//         };
+//         if (r.defaultIsExpand) {
+//           first = false;
+//         }
+//         return r;
+//       })} by={n => n.item.record.id} fallback={<AppEmpty/>}>
+//         {(n) => <TracingTreeItem isAppTable={props.isAppTable} layer={props.layer}
+//                                  appRunId={props.appRunId} path={props.path}
+//                                  defaultIsExpand={n().defaultIsExpand}
+//                                  data={n().item} isEnd={() => n().item.end != null || props.isEnd()}/>}
+//       </Key>
+//     </div>
+//   )
+// }
+
+function ExpandablePanel(props: {
+  header: (_isExpand: Accessor<boolean>) => JSX.Element,
+  defaultIsExpand?: boolean,
+  children?: JSX.Element,
+  headerContainerProps?: HTMLAttributes<HTMLDivElement>
+}) {
+  let [isExpand, setIsExpand] = createSignal(props.defaultIsExpand ?? false);
+  return <>
+    <div {...props.headerContainerProps} onClick={() => setIsExpand(n => !n)}>
+      {props.header(isExpand)}
+    </div>
+    <Show when={isExpand()}>
+      {props.children}
+    </Show>
+  </>
+}
+
 function TracingTreeItemList(allProps: {
   spanTId?: string,
   appRunId?: string,
   isEnd: Accessor<boolean>,
   layer: number,
+  path: TracePathItem[],
   isAppTable?: boolean,
   scrollToBottom?: boolean,
   containerInfo?: {
@@ -1080,7 +1270,7 @@ function TracingTreeItemList(allProps: {
     fixed: Accessor<boolean>
   }
 } & HTMLAttributes<HTMLDivElement>) {
-  let [props, forwardProps] = splitProps(allProps, ['scrollToBottom', 'appRunId', 'spanTId', 'isEnd', 'layer', 'containerInfo', 'isAppTable', 'containerInfo', 'isEnd']);
+  let [props, forwardProps] = splitProps(allProps, ['scrollToBottom', 'appRunId', 'spanTId', 'isEnd', 'layer', 'containerInfo', 'isAppTable', 'containerInfo', 'isEnd', 'path']);
 
   let {rootContainerElement, filter, search} = useContext(CurTraceTreeInfo);
   let [data, actions] = useRecordsTreeLive({
@@ -1096,17 +1286,17 @@ function TracingTreeItemList(allProps: {
       // setTimeout(apply, 300);
     }
   });
-  let [selected, setSelected] = useSelectedTreeItem();
+  let [elementRef, setElementRef] = createSignal<HTMLDivElement>();
+
 
   if (props.scrollToBottom || props.layer == 0) {
     onMount(() => {
-      elementRef?.lastElementChild?.scrollIntoView({
+      elementRef()?.lastElementChild?.scrollIntoView({
         block: 'end',
         behavior: 'smooth'
       })
     })
   }
-  let elementRef!: HTMLDivElement;
   let fetchMoreMarketElement!: HTMLElement;
 
   if (props.containerInfo != null) {
@@ -1123,28 +1313,34 @@ function TracingTreeItemList(allProps: {
     //   }
     // })
   }
+  let isRoot = props.appRunId == null;
+  let offlineAppRuns = () => data().records?.filter(n => n.end != null) ?? [];
+  let elementBounds = createElementBounds(elementRef);
+
+  let moreBtn = () =>
+    <Show
+      when={!isRoot && !data().more_loading && !actions.notMoreOlderData()}>
+      <Button variant={'ghost'} class={"flex-shrink-0"} size="sm" ref={fetchMoreMarketElement}
+              onClick={async () => {
+                // let element = (fetchMoreMarketElement as HTMLElement).nextElementSibling
+                let rc = rootContainerElement();
+                let scrollBottom = rc.scrollHeight - rc.scrollTop;
+                actions.fetchMoreOlder(data().records[0].record.id);
+                rc.scrollTo({
+                  top: rc.scrollHeight - scrollBottom
+                })
+              }}>
+        {t("common:loadMore")}
+      </Button>
+    </Show>;
   let first = true;
   return (
     <Show when={data() != null}>
-      <div {...forwardProps} class={cn("flex flex-col gap-[2px] pt-[2px]", forwardProps.class)} ref={elementRef}>
+      <div {...forwardProps} class={cn("flex flex-col gap-1 pb-1.5 pt-1", forwardProps.class)} ref={setElementRef}>
         <Show when={data().more_loading}>
           <Loading/>
         </Show>
-        <Show
-          when={!data().more_loading && !actions.notMoreData()}>
-          <Button variant={'ghost'} class={"flex-shrink-0"} size="sm" ref={fetchMoreMarketElement}
-                  onClick={async () => {
-                    // let element = (fetchMoreMarketElement as HTMLElement).nextElementSibling
-                    let rc = rootContainerElement();
-                    let scrollBottom = rc.scrollHeight - rc.scrollTop;
-                    actions.fetchMore(data().records[0].record.id);
-                    rc.scrollTo({
-                      top: rc.scrollHeight - scrollBottom
-                    })
-                  }}>
-            {t("common:loadMore")}
-          </Button>
-        </Show>
+        {moreBtn()}
         {/*<For each={data().records.map((n, i, me) => ({*/}
         {/*  item: n,*/}
         {/*  defaultIsExpand: props.layer == 0 && me.length - 1 == i*/}
@@ -1159,10 +1355,54 @@ function TracingTreeItemList(allProps: {
 
         {/*  </Suspense>}*/}
         {/*</For>*/}
-        <Key each={data().records?.map((n, i, me) => {
+        <Show when={isRoot && offlineAppRuns().length > 0}>
+          <ExpandablePanel headerContainerProps={{
+            class: "flex-shrink-0",
+            style: {height: `${ITEM_HEIGHT}px`}
+          }} header={(isExpand) => {
+            return <div class={"absolute"} style={{width: elementBounds?.width ? `${elementBounds.width}px` : 'auto'}}>
+              <div
+                class={"flex sticky px-4 justify-between w-full border border-gray-100 bg-background z-10 items-center gap-2 leading-8 select-none hover:bg-stone-50"}
+                style={{height: `${ITEM_HEIGHT}px`}}>
+
+                <div class="p-1 -mx-1 rounded-sm cursor-pointer hover:bg-stone-200">
+                  <ChevronRight class="transition-transform" classList={{
+                    "rotate-90": isExpand(),
+                    // "text-gray-400": props.data.record.fields[RECORD_FIELDS.empty_children] == true,
+                  }} size={15}/>
+                </div>
+                <div>Expand App Run History</div>
+                <div class={"flex-grow"}></div>
+                <div>{offlineAppRuns().length}</div>
+              </div>
+            </div>
+          }}>
+            <div class={"ml-4 flex flex-col gap-1 pb-1.5 pt-1"}>
+              {moreBtn()}
+              <Key each={offlineAppRuns().map((n, i) => {
+                let r = {
+                  item: n,
+                  defaultIsExpand: props.layer == 0 && (data().records.length - 1) == i && first,
+                  i
+                };
+                if (r.defaultIsExpand) {
+                  first = false;
+                }
+                return r;
+              })} by={n => n.item.record.id} fallback={<AppEmpty/>}>
+                {(n) => <TracingTreeItem isAppTable={props.isAppTable} layer={props.layer}
+                                         appRunId={props.appRunId} path={props.path}
+                                         defaultIsExpand={n().defaultIsExpand}
+                                         data={n().item} isEnd={() => n().item.end != null || props.isEnd()}/>}
+              </Key>
+            </div>
+          </ExpandablePanel>
+        </Show>
+        <Key each={data().records?.filter(n => isRoot ? n.end == null : true).map((n, i) => {
           let r = {
             item: n,
-            defaultIsExpand: props.layer == 0 && (me.length - 1) == i && first
+            defaultIsExpand: props.layer == 0 && (data().records.length - 1) == i && first,
+            i
           };
           if (r.defaultIsExpand) {
             first = false;
@@ -1170,12 +1410,29 @@ function TracingTreeItemList(allProps: {
           return r;
         })} by={n => n.item.record.id} fallback={<AppEmpty/>}>
           {(n) => <TracingTreeItem isAppTable={props.isAppTable} layer={props.layer}
-                                   appRunId={props.appRunId}
+                                   appRunId={props.appRunId} path={props.path}
                                    defaultIsExpand={n().defaultIsExpand}
-                                   data={n().item} isEnd={() => n().item.end != null || props.isEnd()}
-                                   onMouseDown={() => setSelected(n().item)}
-                                   selected={() => selected()?.record.id == n().item.record.id}/>}
+                                   data={n().item} isEnd={() => n().item.end != null || props.isEnd()}/>}
         </Key>
+
+        <Show
+          when={!data().is_end}>
+          <Button variant={'ghost'} class={"flex-shrink-0"} size="sm" ref={fetchMoreMarketElement}
+                  onClick={async () => {
+                    // let element = (fetchMoreMarketElement as HTMLElement).nextElementSibling
+                    // let rc = traceTreeInfo.rootContainerElement();
+                    // let scrollBottom = rc.scrollHeight - rc.scrollTop;
+                    actions.fetchMore(data().records.at(-1).record.id);
+                    // rc.scrollTo({
+                    //   top: rc.scrollHeight - scrollBottom
+                    // })
+                  }}>
+            {t("common:loadMore")}
+          </Button>
+          <Show when={data().more_loading}>
+            <Loading/>
+          </Show>
+        </Show>
         {/*<VirtualList each={data().records.map((n, i, me) => {
           return ({
             item: n,
@@ -1315,28 +1572,33 @@ function TracingTreeItemIoContent(props: {
 }
 
 function TracingTreeItemBase(allProps: {
-  data: TracingTreeRecordDto,
+  data: TracingRecordDto,
+  leading?: (_n: () => JSX.Element) => JSX.Element,
   selected: Accessor<boolean>,
   needFixed: Accessor<boolean>,
   forceError?: Accessor<boolean>
 } & HTMLAttributes<HTMLDivElement>) {
-  let [props, rootProps] = splitProps(allProps, ['data', 'selected', 'needFixed', 'children', 'forceError']);
+  let [props, rootProps] = splitProps(allProps, ['data', 'selected', 'needFixed', 'children', 'forceError', 'leading']);
 
-  return <div
-    {...rootProps}
-    class={cn("flex bg-background z-10 border-y border-gray-50 items-center gap-2 px-1 leading-8 select-none", props.selected() ? "bg-stone-100" : "hover:bg-stone-50", props.needFixed() && "border-stone-200", rootProps.class)}>
+  let defaultLeading = () => <>
     <TracingLevelIcon
-      level={(props.forceError && props.forceError()) ? TracingLevel.Error : props.data.record.level}/>
-    <Show when={![TracingKind.SpanCreate, TracingKind.AppStart as TracingKind].includes(props.data.record.kind)}>
+      level={(props.forceError && props.forceError()) ? TracingLevel.Error : props.data.level}/>
+    <Show when={!EXPANDABLE_KINDS.includes(props.data.kind)}>
       <div class="p-1 flex-shrink-0 -mx-1"
-           style={{color: getLevelColor(props.data.record.level)}}>
+           style={{color: getLevelColor(props.data.level)}}>
         <Dot size={15}/>
       </div>
     </Show>
+  </>;
+  let leading: JSX.Element = props.leading ? props.leading(defaultLeading) : defaultLeading();
+  return <div
+    {...rootProps}
+    class={cn("flex bg-background z-10 items-center gap-2 px-1 leading-8 select-none", props.selected() ? "bg-stone-100" : "hover:bg-stone-50", props.needFixed() && "border-stone-200 z-30", rootProps.class)}>
+    {leading}
     {props.children}
     <div class="flex-grow self-stretch"/>
-    <div class={"whitespace-nowrap flex-shrink-0 select-none"}>{props.data.record.recordTime?.toLocaleString()}</div>
-    {/* <div>{JSON.stringify(props.data.record.fields)}</div> */}
+    <div class={"whitespace-nowrap flex-shrink-0 select-none"}>{props.data.recordTime?.toLocaleString()}</div>
+    {/* <div>{JSON.stringify(props.data.fields)}</div> */}
   </div>
 }
 
@@ -1351,26 +1613,53 @@ function getDeltaMilliseconds(data: TracingTreeRecordDto): number {
   }
 }
 
-function TracingTreeItem(all_props: {
+function TracingTreeItemFields(props: { fields: any }) {
+  return (
+    <For
+      each={Object.entries(props.fields)
+        .filter((n: [string, any]) => (typeof n[1]) != 'object' && !n[0].startsWith("__data"))
+        .map(n => {
+          let value = n[1]?.toString().trim();
+          if (value.length > 80) {
+            value = "...";
+          }
+          return [n[0], value];
+        })
+      }>
+      {([name, value]) => <div
+        class=" bg-stone-100 shadow-sm flex-shrink-0 border flex rounded-sm overflow-hidden text-xsm leading-none text-nowrap select-none">
+        <div class=" p-1">{name}</div>
+        <Show when={value != ""}>
+          <div class="bg-background border-l p-1">{value}</div>
+        </Show>
+      </div>}
+    </For>
+  )
+}
+
+let ITEM_HEIGHT = 32;
+
+function TracingTreeItem(allProps: {
   data: TracingTreeRecordDto,
-  selected: Accessor<boolean>,
   isEnd: Accessor<boolean>,
+  path: TracePathItem[],
   appRunId: string,
   isAppTable: boolean,
   defaultIsExpand?: boolean,
   layer: number
 } & HTMLAttributes<HTMLDivElement>) {
-  let [props, rootProps] = splitProps(all_props, ['data', 'defaultIsExpand', 'selected', 'appRunId', 'layer', 'isAppTable', 'layer', 'isEnd']);
+  let [props, rootProps] = splitProps(allProps, ['data', 'defaultIsExpand', 'appRunId', 'layer', 'isAppTable', 'layer', 'isEnd', 'class', 'path']);
   let [isExpand, setIsExpand] = createSignal((props.defaultIsExpand || getFlags(props.data.record, AUTO_EXPAND)) ?? false);
   let [target, setTarget] = createSignal<HTMLElement>();
   let [itemTarget, setItemTarget] = createSignal<HTMLElement>();
   let needFixed = () => false;
   let hasChildren = props.data.record.kind == TracingKind.AppStart || (props.data.record.spanTId != null && props.data.record.kind == TracingKind.SpanCreate);
-  let itemHeight = 32;
-  let fixGap = 2;
+  let fixGap = 4;
   let traceTreeInfo = useContext(CurTraceTreeInfo);
+  let [curTracePath, setCurTracePath] = useContext(CurTracePath);
   let rootContainerBounds = createElementBounds(traceTreeInfo.rootContainerElement());
 
+  let tLayer = () => props.layer - curTracePath().length;
   if (hasChildren) {
     let targetBounds = createElementBounds(target);
     let date = Date.now();
@@ -1379,9 +1668,9 @@ function TracingTreeItem(all_props: {
         return false;
       }
       if (isExpand()) {
-        let offset: number = (itemHeight + fixGap) * props.layer + rootContainerBounds.top;
+        let offset: number = (ITEM_HEIGHT + fixGap) * tLayer() + rootContainerBounds.top;
         if (targetBounds.top < offset) {
-          if (((Date.now() - date) > 300) && (offset - targetBounds.top + itemHeight) > targetBounds.height) {
+          if (((Date.now() - date) > 300) && (offset - targetBounds.top + ITEM_HEIGHT) > targetBounds.height) {
             return false;
           }
           if (prevValue == false) {
@@ -1398,9 +1687,9 @@ function TracingTreeItem(all_props: {
     createEffect(() => {
       if (needFixed()) {
         let offset = rootContainerBounds.top;
-        target().style.paddingTop = `${itemHeight}px`;
+        target().style.paddingTop = `${ITEM_HEIGHT}px`;
         itemTarget().style.position = "fixed";
-        itemTarget().style.top = `${offset + props.layer * (itemHeight + fixGap)}px`;
+        itemTarget().style.top = `${offset + tLayer() * (ITEM_HEIGHT + fixGap)}px`;
         itemTarget().style.width = `${targetBounds.width}px`;
       } else {
         target().style.paddingTop = '0px';
@@ -1439,100 +1728,153 @@ function TracingTreeItem(all_props: {
       // }, 100)
     }
   };
+  let curSelected = useCurSelectedTreeItem();
+  let selected = () => curSelected.isSelected(props.data.record.id);
   return (
-    <div ref={setTarget}>
-      <TracingTreeItemBase ref={setItemTarget} data={props.data} onDblClick={() => expand()}
-                           style={{'max-width': rootContainerBounds ? `${rootContainerBounds.width}px` : 'initial', ...(typed_span_name() == null ? {height: `${itemHeight}px`} : {})}}
-                           onClick={/*getFlags(props.data.record, EMPTY_CHILDREN) ? null : */(e) => {
-                             if (!e.altKey) {
-                               return;
-                             }
-                             expand();
-                           }}
-                           selected={props.selected} needFixed={needFixed} {...rootProps}>
-        <Switch fallback={<>
-          <Show
-            when={[TracingKind.SpanCreate, TracingKind.AppStart as TracingKind].includes(props.data.record.kind) && typed_span_name() == null}>
-            <div classList={{
-              "hover:bg-stone-200": true
-              // "hover:bg-stone-200": props.data.record.fields[RECORD_FIELDS.empty_children] != true
-            }} onDblClick={e => e.stopPropagation()}
-                 onClick={/*getFlags(props.data.record, EMPTY_CHILDREN) ? null : */(e) => {
-                   setIsExpand(n => !n);
-                   e.stopPropagation();
-                 }}
-                 class="p-1 -mx-1 rounded-sm cursor-pointer">
-              <ChevronRight class="transition-transform" classList={{
-                "rotate-90": isExpand(),
-                // "text-gray-400": props.data.record.fields[RECORD_FIELDS.empty_children] == true,
-              }} size={15}/>
-            </div>
-          </Show>
-          <div
-            class={"text-ellipsis flex-shrink-0 overflow-hidden whitespace-nowrap select-none"}>{props.data.record.name}</div>
-          <Show when={props.data.record.kind == TracingKind.Event && props.data.record.repeatedCount != null}>
-            <div title="重复次数"
-                 class="shadow-sm border p-1 text-primary flex rounded-sm overflow-hidden text-xsm leading-none select-none">
-              x{props.data.record.repeatedCount}
-            </div>
-          </Show>
-          <For
-            each={Object.entries({
-              ...(props.data.record.fields ?? {}),
-              ...((props.data.variant as TracingTreeRecordVariantDtoOneOf)?.spanRun?.fields ?? {})
-            })
-              .filter((n: [string, any]) => (typeof n[1]) != 'object' && !n[0].startsWith("__data"))
-              .map(n => {
-                let value = n[1]?.toString().trim();
-                if (value.length > 80) {
-                  value = "...";
-                }
-                return [n[0], value];
-              })
-            }>
-            {([name, value]) => <div
-              class=" bg-stone-100 shadow-sm flex-shrink-0 border flex rounded-sm overflow-hidden text-xsm leading-none text-nowrap select-none">
-              <div class=" p-1">{name}</div>
-              <Show when={value != ""}>
-                <div class="bg-background border-l p-1">{value}</div>
+    <div ref={setTarget}
+         class={cn("border border-gray-100", (selected() || ((props.data.variant as TracingTreeRecordVariantDtoOneOf)?.spanRun?.relatedEvents?.some(n => curSelected.isSelected(n.id)))) && "ring-1 ring-offset-4 z-20 ring-blue-600 shadow-blue-600", props.class)}>
+      <ContextMenu>
+        <ContextMenuTrigger>
+          <TracingTreeItemBase ref={setItemTarget} data={props.data.record} onDblClick={() => expand()}
+                               class={"border border-transparent"}
+                               style={{'max-width': rootContainerBounds ? `${rootContainerBounds.width}px` : 'initial', ...(typed_span_name() == null ? {height: `${ITEM_HEIGHT}px`} : {})}}
+                               onClick={/*getFlags(props.data.record, EMPTY_CHILDREN) ? null : */(e) => {
+                                 curSelected.setSelected({record: props.data, path: props.path});
+                                 if (!e.altKey) {
+                                   return;
+                                 }
+                                 expand();
+                               }}
+                               selected={selected} needFixed={needFixed} {...rootProps}>
+            <Switch fallback={<>
+              <Show
+                when={EXPANDABLE_KINDS.includes(props.data.record.kind) && typed_span_name() == null}>
+                <div classList={{
+                  "hover:bg-stone-200": true
+                  // "hover:bg-stone-200": props.data.record.fields[RECORD_FIELDS.empty_children] != true
+                }} onDblClick={e => e.stopPropagation()}
+                     onClick={/*getFlags(props.data.record, EMPTY_CHILDREN) ? null : */(e) => {
+                       setIsExpand(n => !n);
+                       e.stopPropagation();
+                     }}
+                     class="p-1 -mx-1 rounded-sm cursor-pointer">
+                  <ChevronRight class="transition-transform" classList={{
+                    "rotate-90": isExpand(),
+                    // "text-gray-400": props.data.record.fields[RECORD_FIELDS.empty_children] == true,
+                  }} size={15}/>
+                </div>
               </Show>
-            </div>}
-          </For>
-          {/*{JSON.stringify(props.data.record.fields)}*/}
-          <Show
-            when={[TracingKind.SpanCreate, TracingKind.AppStart as TracingKind].includes(props.data.record.kind)}>
-            <TracingRunTimer
-              badEnd={props.data.end?.exceptionEnd != null}
-              endTimeMs={() => {
-                if (!props.isEnd()) {
-                  return null;
-                }
-                return props.data.end?.endDate.getTime() ?? props.data.end?.exceptionEnd?.getTime()
-              }}
-              deltaMilliseconds={getDeltaMilliseconds(props.data)}
-              startTimeMs={props.data.record.recordTime.getTime()}
-            />
+              <div
+                class={"text-ellipsis flex-shrink-0 overflow-hidden whitespace-nowrap select-none"}>{props.data.record.name}</div>
+              <Show when={props.data.record.kind == TracingKind.Event && props.data.record.repeatedCount != null}>
+                <div title="重复次数"
+                     class="shadow-sm border p-1 text-primary flex rounded-sm overflow-hidden text-xsm leading-none select-none">
+                  x{props.data.record.repeatedCount}
+                </div>
+              </Show>
+              <TracingTreeItemFields fields={{
+                ...(props.data.record.fields ?? {}),
+                ...((props.data.variant as TracingTreeRecordVariantDtoOneOf)?.spanRun?.fields ?? {})
+              }}></TracingTreeItemFields>
+              {/*{JSON.stringify(props.data.record.fields)}*/}
+              <Show
+                when={[TracingKind.SpanCreate, TracingKind.AppStart as TracingKind].includes(props.data.record.kind)}>
+                <TracingRunTimer
+                  badEnd={props.data.end?.exceptionEnd != null}
+                  endTimeMs={() => {
+                    if (!props.isEnd()) {
+                      return null;
+                    }
+                    return props.data.end?.endDate.getTime() ?? props.data.end?.exceptionEnd?.getTime()
+                  }}
+                  deltaMilliseconds={getDeltaMilliseconds(props.data)}
+                  startTimeMs={props.data.record.recordTime.getTime()}
+                />
+              </Show>
+            </>}>
+              <Match when={['AsyncRead', 'AsyncWrite'].includes(typed_span_name())}>
+                <TracingTreeItemIoContent isEnd={props.isEnd} data={props.data}
+                                          deltaMilliseconds={getDeltaMilliseconds(props.data)}/>
+              </Match>
+              {/*<Match when={['Stream'].includes(typed_span_name())}>*/
+              }
+              {/*  /!*<TracingTreeItemIoContent data={props.data}/>*!/*/
+              }
+              {/*  Stream*/
+              }
+              {/*</Match>*/
+              }
+            </Switch>
+          </TracingTreeItemBase>
+        </ContextMenuTrigger>
+        <ContextMenuContent class={"z-40 outline-none"}>
+          <ContextMenuItem
+            onClick={() => setCurTracePath(EXPANDABLE_KINDS.includes(props.data.record.kind) ? [...props.path, {
+              record: props.data,
+              path: props.path
+            }] : props.path)}>
+            <LogIn size={16} class={"mr-3"} strokeWidth={1}></LogIn>
+            Go Here
+            {/*<ContextMenuShortcut>⌘+T</ContextMenuShortcut>*/}
+          </ContextMenuItem>
+          <Show when={EXPANDABLE_KINDS.includes(props.data.record.kind)}>
+            <ContextMenuItem
+              onClick={() => setIsExpand(n => !n)}>
+              <Show when={isExpand()} fallback={<>
+                <UnfoldVertical size={16} class={"mr-3"} strokeWidth={1}></UnfoldVertical>
+                Expand
+              </>}>
+                <FoldVertical size={16} class={"mr-3"} strokeWidth={1}></FoldVertical>
+                Collapse
+              </Show>
+              {/*<ContextMenuShortcut>⌘+T</ContextMenuShortcut>*/}
+            </ContextMenuItem>
           </Show>
-        </>}>
-          <Match when={['AsyncRead', 'AsyncWrite'].includes(typed_span_name())}>
-            <TracingTreeItemIoContent isEnd={props.isEnd} data={props.data}
-                                      deltaMilliseconds={getDeltaMilliseconds(props.data)}/>
-          </Match>
-          {/*<Match when={['Stream'].includes(typed_span_name())}>*/
-          }
-          {/*  /!*<TracingTreeItemIoContent data={props.data}/>*!/*/
-          }
-          {/*  Stream*/
-          }
-          {/*</Match>*/
-          }
-        </Switch>
-      </TracingTreeItemBase>
+        </ContextMenuContent>
+      </ContextMenu>
+      <Show
+        when={!needFixed() && (props.data.variant as TracingTreeRecordVariantDtoOneOf)?.spanRun?.relatedEvents?.length > 0}>
+        {/*<div class="mx-1 border border-t-0 border-gray-200 rounded-sm overflow-hidden">*/}
+        <div class="border-l-2 mb-1 ml-1 -mt-1 pl-1 pt-1.5 relative left-[0.5px] top-[-1px]"
+             style={{"border-color": getLevelColor(props.data.record.level)}}>
+          <For each={(props.data.variant as TracingTreeRecordVariantDtoOneOf)?.spanRun.relatedEvents}>
+            {n =>
+              <TracingTreeItemBase data={n} onDblClick={() => expand()} class={"text-sm"}
+                                   style={{'max-width': rootContainerBounds ? `${rootContainerBounds.width}px` : 'initial', ...(typed_span_name() == null ? {height: `${ITEM_HEIGHT}px`} : {})}}
+                                   selected={() => curSelected.isSelected(n.id)} needFixed={needFixed} onClick={() => {
+                curSelected.setSelected({
+                  record: {record: n, variant: null, end: null},
+                  path: [...props.path, props.data]
+                });
+              }} leading={() => <>
+                {/*<TracingLevelIcon class={""} level={props.data.record.level}/>*/}
+                <TracingLevelIcon class={"ml-1.5 opacity-50"} level={n.level}/>
+                <div
+                  class={"leading-none p-1 bg-stone-50 border text-primary text-xsm rounded-sm px-1 py-1"}>
+                  {n.fields[RECORD_FIELDS.related_name] ?? "NULL"}
+                </div>
+                {/*{p()}*/}
+              </>}>
+                <div
+                  class={"text-ellipsis overflow-hidden whitespace-nowrap select-none"}>{n.name}</div>
+                <Show when={n.kind == TracingKind.Event && n.repeatedCount != null}>
+                  <div title="重复次数"
+                       class="shadow-sm border p-1 text-primary flex rounded-sm overflow-hidden text-xsm leading-none select-none">
+                    x{n.repeatedCount}
+                  </div>
+                </Show>
+                <TracingTreeItemFields fields={n.fields}></TracingTreeItemFields>
+              </TracingTreeItemBase>}
+          </For>
+        </div>
+      </Show>
       <Show when={hasChildren && isExpand()}>
         <div class="ml-4">
           <Suspense fallback={<Loading/>}>
             <Switch fallback={<>
-              <TracingTreeItemList scrollToBottom={props.defaultIsExpand}
+              <TracingTreeItemList scrollToBottom={props.defaultIsExpand} path={[...props.path, {
+                record: props.data
+              }]}
                                    appRunId={appRunId()}
                                    containerInfo={{fixedElement: itemTarget(), fixed: needFixed}}
                                    layer={props.layer + 1}
@@ -1551,9 +1893,12 @@ function TracingTreeItem(all_props: {
   )
 }
 
-function TracingLevelIcon(props: { level?: TracingLevel | null }) {
+function TracingLevelIcon(allProps: { level?: TracingLevel | null } & HTMLAttributes<HTMLDivElement>) {
+  const [props, rootProps] = splitProps(allProps, ["children", 'level', 'class'])
+
   return (
-    <div style={{background: getLevelColor(props.level)}} class="w-[2px] flex-shrink-0 rounded-sm my-1 self-stretch"/>
+    <div {...rootProps} style={{background: getLevelColor(props.level)}}
+         class={cn("w-[2px] flex-shrink-0 rounded-sm my-1 self-stretch", props.class)}/>
   )
 }
 
@@ -1594,9 +1939,9 @@ function TracingRecordTable(all_props: {
   let [props, rootProps] = splitProps(all_props, ['appRunId']);
 
   let {rootContainerElement, filter, search} = useContext(CurTraceTreeInfo);
-  let [selected, setSelected] = useSelectedTreeItem();
+  let curSelected = useCurSelectedTreeItem();
   let [data] = useRecordsTreeLive({
-    isEnd: () => selected()?.end != null,
+    isEnd: () => curSelected.selected()?.record.end != null,
     appRunId: () => props.appRunId,
     scene: () => null,
     filter,
@@ -1627,8 +1972,8 @@ function TracingRecordTable(all_props: {
         <tbody ref={elementRef} class={"w-full"}>
         <For each={data().records} fallback={<AppEmpty/>}>
           {(item) => (
-            <TracingRecordTr onClick={() => setSelected(item)}
-                             selected={() => selected()?.record.id == item.record.id}
+            <TracingRecordTr onClick={() => curSelected.setSelected({record: item, path: []})}
+                             selected={() => curSelected.isSelected(item.record.id)}
                              item={item.record}/>
           )}
         </For>

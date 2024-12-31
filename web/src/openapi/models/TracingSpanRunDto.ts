@@ -13,6 +13,14 @@
  */
 
 import { mapValues } from '../runtime';
+import type { TracingRecordDto } from './TracingRecordDto';
+import {
+    TracingRecordDtoFromJSON,
+    TracingRecordDtoFromJSONTyped,
+    TracingRecordDtoToJSON,
+    TracingRecordDtoToJSONTyped,
+} from './TracingRecordDto';
+
 /**
  * 
  * @export
@@ -69,6 +77,12 @@ export interface TracingSpanRunDto {
     recordId: number;
     /**
      * 
+     * @type {Array<TracingRecordDto>}
+     * @memberof TracingSpanRunDto
+     */
+    relatedEvents: Array<TracingRecordDto>;
+    /**
+     * 
      * @type {number}
      * @memberof TracingSpanRunDto
      */
@@ -95,6 +109,7 @@ export function instanceOfTracingSpanRunDto(value: object): value is TracingSpan
     if (!('fields' in value) || value['fields'] === undefined) return false;
     if (!('id' in value) || value['id'] === undefined) return false;
     if (!('recordId' in value) || value['recordId'] === undefined) return false;
+    if (!('relatedEvents' in value) || value['relatedEvents'] === undefined) return false;
     if (!('runTime' in value) || value['runTime'] === undefined) return false;
     if (!('spanId' in value) || value['spanId'] === undefined) return false;
     return true;
@@ -118,6 +133,7 @@ export function TracingSpanRunDtoFromJSONTyped(json: any, ignoreDiscriminator: b
         'id': json['id'],
         'idleDuration': json['idle_duration'] == null ? undefined : json['idle_duration'],
         'recordId': json['record_id'],
+        'relatedEvents': ((json['related_events'] as Array<any>).map(TracingRecordDtoFromJSON)),
         'runElapsed': json['run_elapsed'] == null ? undefined : json['run_elapsed'],
         'runTime': (new Date(json['run_time'])),
         'spanId': json['span_id'],
@@ -143,6 +159,7 @@ export function TracingSpanRunDtoFromJSONTyped(json: any, ignoreDiscriminator: b
         'id': value['id'],
         'idle_duration': value['idleDuration'],
         'record_id': value['recordId'],
+        'related_events': ((value['relatedEvents'] as Array<any>).map(TracingRecordDtoToJSON)),
         'run_elapsed': value['runElapsed'],
         'run_time': ((value['runTime']).toISOString()),
         'span_id': value['spanId'],

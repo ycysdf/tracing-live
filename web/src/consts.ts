@@ -1,4 +1,4 @@
-import {TracingLevel} from "./openapi";
+import {TracingKind, TracingLevel} from "./openapi";
 import {HumanizerOptions} from "humanize-duration";
 
 export const NULL_UUID = "00000000-0000-0000-0000-000000000000";
@@ -77,4 +77,7 @@ export const KINDS = [
 export const RECORD_FIELDS = {
   flags: '__data.flags',
   empty_children: '__data.empty_children',
+  related_name: '__data.related_name',
 }
+
+export const EXPANDABLE_KINDS:TracingKind[] = [TracingKind.SpanCreate, TracingKind.AppStart];

@@ -26,7 +26,9 @@ export const TracingKind = {
     Event: 'Event',
     RepEvent: 'RepEvent',
     AppStart: 'AppStart',
-    AppStop: 'AppStop'
+    AppStop: 'AppStop',
+    DataUpdate: 'DataUpdate',
+    RelatedEvent: 'RelatedEvent'
 } as const;
 export type TracingKind = typeof TracingKind[keyof typeof TracingKind];
 

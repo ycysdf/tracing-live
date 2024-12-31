@@ -145,7 +145,7 @@ body {
   border-radius: 8px;
   border: 4px solid transparent;
   background-clip: content-box;
-  @apply bg-primary/20;
+  @apply bg-primary/50;
 }
 
 ::-webkit-scrollbar-corner {

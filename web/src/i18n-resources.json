@@ -19,7 +19,8 @@
       "add": "Add",
       "search": "Search",
       "loading": "Loading",
-      "noData": "No Data"
+      "noData": "No Data",
+      "loadMore": "Load More"
     }
   },
   "zh": {
@@ -42,7 +43,8 @@
       "add": "添加",
       "search": "搜索",
       "loading": "加载中",
-      "noData": "暂无数据"
+      "noData": "暂无数据",
+      "loadMore": "加载更多"
     }
   }
 }
