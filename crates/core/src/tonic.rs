@@ -175,6 +175,7 @@ impl From<TLMsg> for RecordParam {
     fn from(value: TLMsg) -> Self {
         Self {
             send_time: 0,
+            record_index: value.record_index(),
             variant: Some(value.into()),
         }
     }
@@ -188,6 +189,7 @@ impl From<TLMsg> for record_param::Variant {
                 span,
                 attributes,
                 parent_span,
+                ..
             } => record_param::Variant::SpanCreate(SpanCreate {
                 record_time: date.timestamp_nanos_opt().unwrap(),
                 span_info: Some((&span).into()),
@@ -203,23 +205,24 @@ impl From<TLMsg> for record_param::Variant {
                 span,
                 date,
                 attributes,
+                ..
             } => record_param::Variant::SpanRecordField(SpanRecordField {
                 record_time: date.timestamp_nanos_opt().unwrap(),
                 pos_info: Some((&span.metadata).into()),
                 span_info: Some((&span).into()),
                 fields: attributes.into(),
             }),
-            TLMsg::SpanEnter { span, date } => record_param::Variant::SpanEnter(SpanEnter {
+            TLMsg::SpanEnter { span, date, .. } => record_param::Variant::SpanEnter(SpanEnter {
                 record_time: date.timestamp_nanos_opt().unwrap(),
                 pos_info: Some((&span.metadata).into()),
                 span_info: Some((&span).into()),
             }),
-            TLMsg::SpanLeave { span, date } => record_param::Variant::SpanLeave(SpanLeave {
+            TLMsg::SpanLeave { span, date, .. } => record_param::Variant::SpanLeave(SpanLeave {
                 record_time: date.timestamp_nanos_opt().unwrap(),
                 pos_info: Some((&span.metadata).into()),
                 span_info: Some((&span).into()),
             }),
-            TLMsg::SpanClose { span, date } => record_param::Variant::SpanClose(SpanClose {
+            TLMsg::SpanClose { span, date, .. } => record_param::Variant::SpanClose(SpanClose {
                 record_time: date.timestamp_nanos_opt().unwrap(),
                 pos_info: Some((&span.metadata).into()),
                 span_info: Some((&span).into()),
@@ -230,6 +233,7 @@ impl From<TLMsg> for record_param::Variant {
                 attributes,
                 span,
                 date,
+                ..
             } => record_param::Variant::Event(Event {
                 record_time: date.timestamp_nanos_opt().unwrap(),
                 message: message.into(),
@@ -325,6 +329,7 @@ impl TLAppInfoExt for TLAppInfo {
                 })
                 .collect(),
             rtt: rtt.as_secs_f64(),
+            reconnect: false,
         }
     }
 }

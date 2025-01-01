@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use core::fmt::{Debug, Display, Formatter};
+use core::sync::atomic::AtomicU64;
 use derive_more::From;
 use hashbrown::HashMap;
 use serde::{Deserialize, Serialize};
@@ -123,35 +124,54 @@ pub struct SpanInfo {
 #[serde(bound(deserialize = "'de: 'static"))]
 pub enum TLMsg {
     SpanCreate {
+        record_index: u64,
         date: DateTime<Utc>,
         span: SpanInfo,
         attributes: SpanAttrs,
         parent_span: Option<SpanInfo>,
     },
     SpanRecordAttr {
+        record_index: u64,
         date: DateTime<Utc>,
         span: SpanInfo,
         attributes: SpanAttrs,
     },
     SpanEnter {
+        record_index: u64,
         date: DateTime<Utc>,
         span: SpanInfo,
     },
     SpanLeave {
+        record_index: u64,
         date: DateTime<Utc>,
         span: SpanInfo,
     },
     SpanClose {
+        record_index: u64,
         date: DateTime<Utc>,
         span: SpanInfo,
     },
     Event {
+        record_index: u64,
         date: DateTime<Utc>,
         message: SmolStr,
         metadata: VxMetadata,
         attributes: SpanAttrs,
         span: Option<SpanInfo>,
     },
+}
+
+impl TLMsg {
+    pub fn record_index(&self)->u64 {
+         match self {
+               TLMsg::SpanCreate { record_index, .. } => *record_index,
+               TLMsg::SpanRecordAttr { record_index, .. } => *record_index,
+               TLMsg::SpanEnter { record_index, .. } => *record_index,
+               TLMsg::SpanLeave { record_index, .. } => *record_index,
+               TLMsg::SpanClose { record_index, .. } => *record_index,
+               TLMsg::Event { record_index, .. } => *record_index,
+         }
+    }
 }
 
 pub trait TracingLiveMsgSubscriber: Send + Sync + 'static {
@@ -184,6 +204,7 @@ where
 pub struct TLLayer<F> {
     pub subscriber: F,
     pub enable_enter: bool,
+    pub record_index: AtomicU64,
 }
 
 impl<S, F> Layer<S> for TLLayer<F>
@@ -204,6 +225,7 @@ where
             .map(|n| n.id().into_u64());
         let parent = parent_id.map(|n| _ctx.span(&Id::from_u64(n))).flatten();
         let msg = TLMsg::SpanCreate {
+            record_index: self.record_index.fetch_add(1, core::sync::atomic::Ordering::Relaxed),
             date: now(),
             span: SpanInfo {
                 id: id.into_u64(),
@@ -228,6 +250,7 @@ where
         _values.record(&mut attributes);
 
         let msg = TLMsg::SpanRecordAttr {
+            record_index: self.record_index.fetch_add(1, core::sync::atomic::Ordering::Relaxed),
             date,
             span: SpanInfo {
                 id: _span.id().into_u64(),
@@ -247,6 +270,7 @@ where
         _event.record(&mut attributes);
         let message = attributes.0.remove("message");
         let msg = TLMsg::Event {
+            record_index: self.record_index.fetch_add(1, core::sync::atomic::Ordering::Relaxed),
             date,
             message: message.map(|n| n.to_smolstr()).unwrap_or("".into()),
             metadata: _event.metadata().into(),
@@ -269,6 +293,7 @@ where
             return;
         }
         let msg = TLMsg::SpanEnter {
+            record_index: self.record_index.fetch_add(1, core::sync::atomic::Ordering::Relaxed),
             date,
             span: SpanInfo {
                 id: _span.id().into_u64(),
@@ -288,6 +313,7 @@ where
             return;
         }
         let msg = TLMsg::SpanLeave {
+            record_index: self.record_index.fetch_add(1, core::sync::atomic::Ordering::Relaxed),
             date,
             span: SpanInfo {
                 id: _span.id().into_u64(),
@@ -304,6 +330,7 @@ where
             return;
         }
         let msg = TLMsg::SpanClose {
+            record_index: self.record_index.fetch_add(1, core::sync::atomic::Ordering::Relaxed),
             date,
             span: SpanInfo {
                 id: _span.id().into_u64(),

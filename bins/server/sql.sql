@@ -1,22 +1,23 @@
 create table tracing_record
 (
-    id               bigint      not null,
-    app_id           uuid        not null,
-    app_version      varchar(16) not null,
-    app_run_id       uuid        not null,
-    node_id          varchar(64) not null,
-    name             text        not null,
-    record_time      timestamptz not null,
-    kind             varchar(16) not null,
-    creation_time    timestamptz not null default now(),
-    level            int,
-    span_id          uuid,
-    parent_span_t_id bigint,
-    parent_id        uuid,
-    fields           jsonb,
-    target           varchar(64),
-    module_path      varchar(128),
-    position_info    varchar(128) -- file;line
+    id                   bigint      not null,
+    app_run_record_index bigint      not null,
+    app_id               uuid        not null,
+    app_version          varchar(16) not null,
+    app_run_id           uuid        not null,
+    node_id              varchar(64) not null,
+    name                 text        not null,
+    record_time          timestamptz not null,
+    kind                 varchar(16) not null,
+    creation_time        timestamptz not null default now(),
+    level                int,
+    span_id              uuid,
+    parent_span_t_id     bigint,
+    parent_id            uuid,
+    fields               jsonb,
+    target               varchar(64),
+    module_path          varchar(128),
+    position_info        varchar(128) -- file;line
 );
 
 create table app

@@ -54,6 +54,7 @@ async fn main() -> anyhow::Result<()> {
         .with(TLLayer {
             subscriber: MsgReceiverSubscriber::new(self_record_sender),
             enable_enter: false,
+            record_index: 1.into(),
         })
         .with(tracing_subscriber::fmt::layer().pretty())
         .init();
@@ -94,7 +95,10 @@ async fn main() -> anyhow::Result<()> {
                     } else {
                         self_lifetime.record(variant).await?
                     };
-                    if let Err(err) = self_lifetime.record_sender.send(record) {
+                    if let Err(err) = self_lifetime.record_sender.send(RunMsg::Record {
+                        record_index: msg.record_index,
+                        variant: record,
+                    }) {
                         info!(?err, "record_sender send failed. exit!");
                         break;
                     }

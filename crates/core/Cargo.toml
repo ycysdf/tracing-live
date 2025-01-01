@@ -10,6 +10,8 @@ default = []
 client = []
 server = []
 std = ["dep:tonic", "dep:flume", "chrono/now"]
+build-proto = ["dep:tonic-build"]
+build-proto-dev = ["build-proto"]
 
 [dependencies]
 tonic = { version = "0.12", features = ["prost", "codegen", ], default-features = false, optional = true }
@@ -24,5 +26,5 @@ prost = "0.13"
 serde_json = { version = "1", features = ["alloc"], default-features = false }
 serde = { version = "1", features = ["derive", "alloc"], default-features = false }
 derive_more = { version = "1", features = ["from"], default-features = false }
-#[build-dependencies]
-#tonic-build = { version = "0.12", features = ["prost"] }
+[build-dependencies]
+tonic-build = { version = "0.12", features = ["prost"], optional = true }

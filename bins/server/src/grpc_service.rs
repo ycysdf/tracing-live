@@ -9,6 +9,7 @@ use bitflags::bitflags;
 use bon::bon;
 use chrono::{DateTime, FixedOffset, Local, Utc};
 use derive_more::{Constructor, Deref, DerefMut, From};
+use flume::r#async::RecvStream;
 use futures_util::StreamExt;
 use serde_json::json;
 use smallvec::SmallVec;
@@ -22,8 +23,8 @@ use tracing::field::debug;
 use tracing::{error, info, info_span, instrument, warn, Instrument, Span};
 use tracing_lv_core::proto::tracing_service_server::TracingService;
 use tracing_lv_core::proto::{
-    field_value, record_param, AppStart, FieldValue, Ping, PingResult, PosInfo, RecordParam,
-    SpanClose, SpanCreate, SpanLeave, SpanRecordField, TracingRecordResult,
+    field_value, record_param, AppRunReplay, AppStart, FieldValue, PingParam, PingResult, PosInfo,
+    RecordParam, SpanClose, SpanCreate, SpanLeave, SpanRecordField,
 };
 use tracing_lv_core::{FLAGS_AUTO_EXPAND, FLAGS_FORK};
 use uuid::Uuid;
@@ -235,7 +236,10 @@ impl AppRunLifetime {
     }
 }
 impl AppRunLifetime {
-    pub async fn record(&mut self, variant: record_param::Variant) -> Result<RunMsg, Status> {
+    pub async fn record(
+        &mut self,
+        variant: record_param::Variant,
+    ) -> Result<TracingRecordVariant, Status> {
         Ok(match variant {
             record_param::Variant::AppStart(_) => {
                 unreachable!("AppStart should not be call")
@@ -287,7 +291,10 @@ impl AppRunLifetime {
         let app_run_info = record.app_info().clone();
         Span::current().record("record", debug(&record));
         Span::current().record("app_run_info", debug(&app_run_info));
-        let _ = record_sender.send(RunMsg::Record(record));
+        let _ = record_sender.send(RunMsg::Record {
+            record_index: 0,
+            variant: record,
+        });
         Ok(Self {
             app_start,
             tracing_service,
@@ -369,7 +376,7 @@ impl AppRunLifetime {
         })
     }
 
-    async fn span_create(&mut self, param: SpanCreate) -> Result<RunMsg, Status> {
+    async fn span_create(&mut self, param: SpanCreate) -> Result<TracingRecordVariant, Status> {
         let parent_span_info = param.parent_span_info.map(|n| self.new_span_info(n, None));
 
         let target: SmolStr = param.target.into();
@@ -397,11 +404,11 @@ impl AppRunLifetime {
             );
         }
 
-        Ok(RunMsg::Record(TracingRecordVariant::SpanCreate {
+        Ok(TracingRecordVariant::SpanCreate {
             name: full_info.cache_id.name.clone(),
             info: full_info,
             parent_span_info,
-        }))
+        })
     }
 
     fn get_running_span(&self, t_id: u64) -> Result<RunningSpan, Status> {
@@ -415,44 +422,50 @@ impl AppRunLifetime {
     async fn span_enter(
         &mut self,
         param: tracing_lv_core::proto::SpanEnter,
-    ) -> Result<RunMsg, Status> {
-        Ok(RunMsg::Record(TracingRecordVariant::SpanEnter {
+    ) -> Result<TracingRecordVariant, Status> {
+        Ok(TracingRecordVariant::SpanEnter {
             info: self
                 .get_span_full_info(param.record_time, param.span_info.unwrap(), param.pos_info)
                 .call()
                 .await?,
-        }))
+        })
     }
 
-    async fn span_leave(&mut self, param: SpanLeave) -> Result<RunMsg, Status> {
-        Ok(RunMsg::Record(TracingRecordVariant::SpanLeave {
+    async fn span_leave(&mut self, param: SpanLeave) -> Result<TracingRecordVariant, Status> {
+        Ok(TracingRecordVariant::SpanLeave {
             info: self
                 .get_span_full_info(param.record_time, param.span_info.unwrap(), param.pos_info)
                 .call()
                 .await?,
-        }))
+        })
     }
 
-    async fn span_close(&mut self, param: SpanClose) -> Result<RunMsg, Status> {
-        Ok(RunMsg::Record(TracingRecordVariant::SpanClose {
+    async fn span_close(&mut self, param: SpanClose) -> Result<TracingRecordVariant, Status> {
+        Ok(TracingRecordVariant::SpanClose {
             info: self
                 .get_span_full_info(param.record_time, param.span_info.unwrap(), param.pos_info)
                 .call()
                 .await?,
-        }))
+        })
     }
 
-    async fn span_record_field(&mut self, param: SpanRecordField) -> Result<RunMsg, Status> {
-        Ok(RunMsg::Record(TracingRecordVariant::SpanRecord {
+    async fn span_record_field(
+        &mut self,
+        param: SpanRecordField,
+    ) -> Result<TracingRecordVariant, Status> {
+        Ok(TracingRecordVariant::SpanRecord {
             info: self
                 .get_span_full_info(param.record_time, param.span_info.unwrap(), param.pos_info)
                 .fields(param.fields)
                 .call()
                 .await?,
-        }))
+        })
     }
 
-    async fn event(&mut self, param: tracing_lv_core::proto::Event) -> Result<RunMsg, Status> {
+    async fn event(
+        &mut self,
+        param: tracing_lv_core::proto::Event,
+    ) -> Result<TracingRecordVariant, Status> {
         let record_time = DateTime::from_timestamp_nanos(param.record_time);
         let (span_info, running_span) = if let Some(span_info) = param.span_info {
             let span_info = self.new_span_info(span_info, None);
@@ -502,7 +515,7 @@ impl AppRunLifetime {
 
         if is_related_event {}
 
-        Ok(RunMsg::Record(TracingRecordVariant::Event {
+        Ok(TracingRecordVariant::Event {
             message,
             module_path,
             file_line,
@@ -515,10 +528,14 @@ impl AppRunLifetime {
             app_info: self.app_run_info.clone(),
             is_repeated_event: false,
             is_related_event,
-        }))
+        })
     }
 
-    async fn app_stop(mut self, normal_stop: Option<DateTime<Utc>>) -> Result<(), Status> {
+    async fn app_stop(
+        mut self,
+        normal_stop: Option<DateTime<Utc>>,
+        record_index: u64,
+    ) -> Result<(), Status> {
         let exception_end = normal_stop.is_none();
         let record_time = normal_stop.clone().unwrap_or_else(|| {
             GLOBAL_DATA
@@ -584,12 +601,15 @@ impl AppRunLifetime {
         });
         let _ = self
             .record_sender
-            .send(RunMsg::Record(TracingRecordVariant::AppStop {
-                record_time,
-                app_info: self.app_run_info.clone(),
-                name: self.app_start.name.into(),
-                exception_end,
-            }))
+            .send(RunMsg::Record {
+                record_index,
+                variant: TracingRecordVariant::AppStop {
+                    record_time,
+                    app_info: self.app_run_info.clone(),
+                    name: self.app_start.name.into(),
+                    exception_end,
+                },
+            })
             .inspect_err(|err| {
                 error!(?err, "send app stop msg failed");
             });
@@ -632,10 +652,12 @@ pub const CONVENTION_FLAGS_FORK: &'static str = FLAGS_FORK;
 
 #[tonic::async_trait]
 impl TracingService for TracingServiceImpl {
+    type AppRunStream = RecvStream<'static, Result<AppRunReplay, Status>>;
+
     async fn app_run(
         &self,
         request: Request<Streaming<RecordParam>>,
-    ) -> Result<Response<TracingRecordResult>, Status> {
+    ) -> Result<Response<Self::AppRunStream>, Status> {
         let mut streaming = request.into_inner();
         let record = streaming
             .next()
@@ -666,22 +688,34 @@ impl TracingService for TracingServiceImpl {
         // Tonic Bug: ?. Future is sometimes canceled
         tokio::spawn(
             async move {
+                let (reply_sender, reply_receiver) = flume::unbounded();
                 let mut normal_stop = None;
+                let mut last_record_index = 0;
                 let result = async {
                     let mut error_count = 0;
                     while let Some(result) = streaming.next().await {
                         match result {
-                            Ok(RecordParam { send_time, variant }) => {
+                            Ok(RecordParam {
+                                send_time,
+                                variant,
+                                record_index,
+                            }) => {
                                 error_count = 0;
+                                last_record_index = record_index;
                                 let variant = variant.unwrap();
-                                let record = if let record_param::Variant::AppStop(_) = variant {
+                                let variant = if let record_param::Variant::AppStop(_) = variant {
                                     info!("app stop");
                                     normal_stop = Some(send_time);
                                     break;
                                 } else {
                                     app_run_lifetime.record(variant).await?
                                 };
-                                if let Err(err) = app_run_lifetime.record_sender.send(record) {
+                                if let Err(err) =
+                                    app_run_lifetime.record_sender.send(RunMsg::Record {
+                                        record_index,
+                                        variant,
+                                    })
+                                {
                                     info!(?err, "record_sender send failed. exit!");
                                     break;
                                 }
@@ -706,7 +740,10 @@ impl TracingService for TracingServiceImpl {
                 }
                 let run_id = app_run_lifetime.app_run_info.run_id;
                 app_run_lifetime
-                    .app_stop(normal_stop.map(DateTime::from_timestamp_nanos))
+                    .app_stop(
+                        normal_stop.map(DateTime::from_timestamp_nanos),
+                        last_record_index + 1,
+                    )
                     .await
                     .inspect_err(|err| {
                         error!("app_stop error: {err}");
@@ -714,7 +751,7 @@ impl TracingService for TracingServiceImpl {
                 GLOBAL_DATA.remove_running_app(run_id);
 
                 info!("app lifetime end");
-                Ok(Response::new(TracingRecordResult {}))
+                Ok(Response::new(reply_receiver.into_stream()))
             }
             .instrument(span),
         )
@@ -722,7 +759,7 @@ impl TracingService for TracingServiceImpl {
         .map_err(|n| Status::internal(format!("app lifetime panic: {n}")))?
     }
 
-    async fn ping(&self, _request: Request<Ping>) -> Result<Response<PingResult>, Status> {
+    async fn ping(&self, _request: Request<PingParam>) -> Result<Response<PingResult>, Status> {
         Ok(Response::new(PingResult {}))
     }
 }

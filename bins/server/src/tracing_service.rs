@@ -50,7 +50,7 @@ use uuid::Uuid;
 pub type BigInt = i64;
 
 const INSERT_STR: &'static str = r#"
-insert into tracing_record(id,app_id, app_version, app_run_id, node_id, name, record_time, kind, level, span_id, parent_span_t_id, parent_id, fields, target, module_path, position_info)
+insert into tracing_record(id,app_run_record_index,app_id, app_version, app_run_id, node_id, name, record_time, kind, level, span_id, parent_span_t_id, parent_id, fields, target, module_path, position_info)
 values
 "#;
 
@@ -103,6 +103,7 @@ impl TracingRecordBatchInserter {
     #[inline(always)]
     pub fn append_insert_record(
         &mut self,
+        record_index: u64,
         name: &str,
         record_time: &DateTime<FixedOffset>,
         kind: &str,
@@ -125,6 +126,7 @@ impl TracingRecordBatchInserter {
         self.id += 1;
         {
             write!(&mut self.sql, "'{}',", self.id)?;
+            write!(&mut self.sql, "'{}',", i64::from_le_bytes(record_index.to_le_bytes()))?;
             write!(&mut self.sql, "'{}',", app_info.id)?;
             self.add_arg(app_info.version.as_str())?;
             write!(&mut self.sql, "'{}',", app_info.run_id)?;

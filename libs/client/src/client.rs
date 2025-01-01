@@ -299,7 +299,7 @@ where
             .send_compressed(CompressionEncoding::Zstd)
             .accept_compressed(CompressionEncoding::Zstd);
         let (msg_sender, msg_receiver) = flume::unbounded();
-        {
+        let app_start = {
             let instant = Instant::now();
             let _ = client.ping(Ping {}).await.unwrap();
             let rtt = instant.elapsed();
@@ -307,10 +307,12 @@ where
             msg_sender
                 .send(RecordParam {
                     send_time: app_start.record_time.clone(),
-                    variant: Some(record_param::Variant::AppStart(app_start)),
+                    record_index: 0,
+                    variant: Some(record_param::Variant::AppStart(app_start.clone())),
                 })
                 .unwrap();
-        }
+            app_start
+        };
         Ok((
             self.with(TLLayer {
                 subscriber: (
@@ -371,6 +373,7 @@ where
                     }),
                 ),
                 enable_enter: false,
+                record_index: 1.into(),
             }),
             {
                 async move {
@@ -419,19 +422,21 @@ where
                                 (client.app_run(stream).await, client)
                             }
                         };
-                    app_run(client).await.0.unwrap();
-                    // loop {
-                    //     let (r, _client) = { app_run(client).await };
-                    //     client = _client;
-                    //     match r {
-                    //         Ok(record_param) => {
-                    //             warn!("not expected app run end. {record_param:?}");
-                    //         }
-                    //         Err(err) => {
-                    //             error!("app run error end. {err:?}")
-                    //         }
-                    //     }
-                    // }
+                    loop {
+                        let (r, _client) = { app_run(client).await };
+                        client = _client;
+                        match r {
+                            Ok(record_param) => {
+                                warn!("not expected app run end. {record_param:?}");
+                            }
+                            Err(err) => {
+                                error!("app run error end. {err:?}");
+                                eprintln!("app run error end. {err:?}");
+                                tokio::time::sleep(Duration::from_secs(10)).await;
+                                eprintln!("reconnect");
+                            }
+                        }
+                    }
                 }
             },
             TLGuard {

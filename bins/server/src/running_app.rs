@@ -95,7 +95,10 @@ impl RunningApp {
 }
 
 pub enum RunMsg {
-    Record(TracingRecordVariant),
+    Record {
+        record_index: u64,
+        variant: TracingRecordVariant,
+    },
     AddRecordWatcher {
         sender: flume::Sender<Arc<TracingTreeRecordDto>>,
         filter: TracingRecordFilter,
@@ -158,7 +161,7 @@ pub struct RunningApps {
     event_service: EventService,
 
     max_delay: Duration,
-    buf_records: VecDeque<TracingRecordVariant>,
+    buf_records: VecDeque<(TracingRecordVariant,u64)>,
     dto_buf: Vec<(
         TracingRecordVariant,
         BigInt,
@@ -248,7 +251,10 @@ impl RunningApps {
     #[inline(always)]
     fn pre_handle_msg(&mut self, msg: RunMsg) -> PreHandleResult {
         match msg {
-            RunMsg::Record(record) => {
+            RunMsg::Record {
+                record_index,
+                variant: record,
+            } => {
                 if let TracingRecordVariant::SpanCreate { info, .. } = &record {
                     let Some(running_app) = self.get_running_app_mut(&info.app_info) else {
                         return PreHandleResult::Continue;
@@ -299,7 +305,7 @@ impl RunningApps {
                         return PreHandleResult::Continue;
                     }
                 }
-                self.buf_records.push_back(record);
+                self.buf_records.push_back((record,record_index));
                 if self.buf_records.len() >= self.max_buf_count + 1 {
                     PreHandleResult::BufFilled
                 } else {
@@ -347,7 +353,7 @@ impl RunningApps {
 
             let mut records_iter = self.buf_records.iter_mut();
             let mut cur_record_id = self.record_batch_inserter.id;
-            while let Some(record) = records_iter.next() {
+            while let Some((record,record_index)) = records_iter.next() {
                 cur_record_id += 1;
                 if let TracingRecordVariant::Event {
                     span_info,
@@ -450,6 +456,7 @@ impl RunningApps {
                         let file_line = record.file_line();
                         let app_info = record.app_info();
                         self.record_batch_inserter.append_insert_record(
+                            *record_index,
                             record.name(),
                             &record_time,
                             kind.as_str(),
@@ -502,7 +509,7 @@ impl RunningApps {
             debug_assert_eq!(buffed_record_count, self.buf_records.len() as i64);
             self.dto_buf.reserve_exact(self.buf_records.len());
             for record_id in ids {
-                let mut record = self.buf_records.pop_front().unwrap();
+                let (mut record, _record_index) = self.buf_records.pop_front().unwrap();
                 let app_info = record.app_info().clone();
                 let r = match &mut record {
                     TracingRecordVariant::SpanCreate { info, .. } => {
