@@ -380,10 +380,9 @@ mod nodes {
 }
 
 mod records {
-    use super::{Query, Result};
-    use crate::tracing_service::{
-        TracingRecordDto, TracingRecordFilter, TracingService, TracingTreeRecordDto,
-    };
+    use crate::tracing_service::QueryTracingRecordByIds;
+use super::{Query, Result};
+    use crate::tracing_service::{BigInt, TracingRecordDto, TracingRecordFilter, TracingService, TracingTreeRecordDto};
     use axum::extract::State;
     use axum::Json;
     use serde::Deserialize;
@@ -423,10 +422,27 @@ mod records {
         Ok(Json(r))
     }
 
+    #[utoipa::path(
+      get,
+      path = "/tree_by_ids",
+      params(QueryTracingRecordByIds),
+      responses(
+            (status = 200, description = "List all record successfully", body = [TracingTreeRecordDto])
+      )
+   )]
+    pub async fn list_tree_records_by_ids(
+        State(tracing_service): State<TracingService>,
+        Query(filter): Query<QueryTracingRecordByIds>,
+    ) -> Result<Json<Vec<TracingTreeRecordDto>>> {
+        let r: Vec<_> = tracing_service.list_tree_records_by_ids(filter.ids).await?.collect();
+        Ok(Json(r))
+    }
+
     pub(super) fn router(tracing_service: TracingService) -> OpenApiRouter {
         OpenApiRouter::new()
             .routes(routes!(list_records))
             .routes(routes!(list_tree_records))
+            .routes(routes!(list_tree_records_by_ids))
             .with_state(tracing_service)
     }
 }

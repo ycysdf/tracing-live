@@ -1,6 +1,6 @@
 /* eslint-disable solid/reactivity */
 
-import {createAsync} from "@solidjs/router";
+import {createAsync, useSearchParams} from "@solidjs/router";
 import {
   Accessor,
   createContext,
@@ -41,8 +41,8 @@ import {
 } from "~/consts";
 import {getNodesPage} from "~/cache";
 import {useRecordsTreeLive} from "~/lib/use_records_live";
-import {ChevronRight, ChevronsUpDown, Dot, FoldVertical, LogIn, UnfoldVertical} from "lucide-solid";
-import {makePersisted} from "@solid-primitives/storage";
+import {ChevronDown, ChevronRight, ChevronsUpDown, Dot, FoldVertical, LogIn, UnfoldVertical} from "lucide-solid";
+import {AsyncStorage, makePersisted, SyncStorage} from "@solid-primitives/storage";
 import {Loading, LoadingPanel} from "~/components/Loading";
 import {createElementBounds} from "@solid-primitives/bounds";
 import {AUTO_EXPAND, createMultiSelection, getFlags, useIsolateTransition} from "~/utils";
@@ -68,18 +68,33 @@ import {
   ContextMenuSeparator,
   ContextMenuGroupLabel, ContextMenuShortcut
 } from "~/components/ui/context-menu";
+import {HttpClient} from "~/http_client";
 
 const CurSelectedTreeItem = createContext<Signal<SelectedTreeItem | null>>();
 const CurTracePath = createContext<Signal<TracePathItem[]>>();
 
 export function SelectedTreeItemProvider(props: {
-  defaultValue?: TracingTreeRecordDto,
+  defaultValue?: SelectedTreeItem,
   children: JSX.Element
 }) {
-  let signal = createSignal(props.defaultValue);
+  let [curTracePath] = useContext(CurTracePath);
+  let signal = makePersisted(createSignal(props.defaultValue), {
+    name: 'cs',
+    storage: useRecordIdSearchQueryStorage(),
+    serialize: (n: TracePathItem) => {
+      let id = n.record.record?.id?.toString();
+      return JSON.stringify(id ? [id] : [])
+    },
+    deserialize: (n: string) => {
+      return n ? {
+        record: JSON.parse(n)[0],
+        path: curTracePath()
+      } : undefined;
+    },
+  });
 
   return (
-    <CurSelectedTreeItem.Provider value={signal}>
+    <CurSelectedTreeItem.Provider value={[signal[0],signal[1]]}>
       {props.children}
     </CurSelectedTreeItem.Provider>
   );
@@ -256,6 +271,56 @@ export interface TracePathItem {
   record: TracingTreeRecordDto,
 }
 
+export function useSearchParamStorage(): SyncStorage {
+  let [searchParam, setSearchParam] = useSearchParams();
+  return {
+    getItem(key: string): string {
+      return searchParam[key] as string;
+    },
+    setItem(key: string, value: string) {
+      setSearchParam({
+        [key]: value
+      });
+    },
+    removeItem(key: string) {
+      setSearchParam({
+        [key]: undefined
+      });
+    }
+  }
+}
+
+
+export function useRecordIdSearchQueryStorage(): AsyncStorage {
+  let [searchParam, setSearchParam] = useSearchParams();
+  return {
+    async getItem(key: string): Promise<string> {
+      let idsStr = searchParam[key] as string;
+      if (idsStr == null) {
+        return null;
+      }
+      let ids: any[] = JSON.parse(idsStr);
+      if (ids.length == 0) {
+        return null;
+      }
+      let r = await HttpClient.listTreeRecordsByIds({
+        ids
+      })
+      return JSON.stringify(r);
+    },
+    async setItem(key: string, value: string) {
+      setSearchParam({
+        [key]: value
+      });
+    },
+    async removeItem(key: string) {
+      setSearchParam({
+        [key]: undefined
+      });
+    }
+  }
+}
+
 export function Traces() {
   const [tracingTreeFilter, setTracingTreeFilter] = makePersisted(createStore<TracingTreeFilter>({
     selectedLevels: [...ALL_LEVELS],
@@ -310,18 +375,20 @@ export function Traces() {
 
   let [nodeSearch, _setNodeSearch] = createSignal('');
   let setNodeSearch = debounce(_setNodeSearch, 300);
-  let spanTId = () => {
-    let curTracePath: Signal<TracePathItem[]> = useContext(CurTracePath);
-    let curValue = curTracePath[0]();
-    if (curValue.length > 0) {
-      return curValue.at(-1).record.record.spanTId
-    } else {
-      return null
-    }
-  }
   return (
     <Show when={nodesPage}>
-      <CurTracePath.Provider value={createSignal([])}>
+      <CurTracePath.Provider value={makePersisted(createSignal([]), {
+        name: "curTracePath",
+        serialize: (n: TracePathItem[]) => {
+          return JSON.stringify(n.map(n => n.record.record.id.toString()))
+        },
+        deserialize: (n: string) => {
+          return JSON.parse(n).map(n => ({
+            record: n
+          }));
+        },
+        storage: useRecordIdSearchQueryStorage(),
+      }) as any}>
         <SelectedTreeItemProvider>
           <div class="flex flex-col gap-3 overflow-hidden flex-grow">
             <div class="panel flex flex-col p-2 gap-2  flex-grow-0">
@@ -574,24 +641,25 @@ export function Traces() {
                         {/*<div></div>*/}
                       </div>
                       <Suspense fallback={<LoadingPanel/>}>
-                        <Switch>
-                          <Match when={tracingTreeFilter.showMode == "Tree"}>
-                            <Show when={useContext(CurTracePath)[0]()} keyed={true}>
-                              {(path: TracePathItem[]) => {
-                                let spanTId = path.length > 0 ? path.at(-1).record.record.spanTId : null;
-                                let isEnd = () => path.length > 0 ? path.at(-1).record.end != null : false;
-                                let appRunId = path.length > 0 ? path[0].record.record.appRunId : null;
-                                return <TracingTreeItemList ref={setRootContainerElement} layer={path.length}
-                                                            isEnd={isEnd} path={path}
-                                                            spanTId={spanTId} appRunId={appRunId}
-                                                            class="overflow-hidden overflow-y-scroll"/>
-                              }}
-                            </Show>
-                          </Match>
-                          <Match when={tracingTreeFilter.showMode == "Flatten"}>
-                            <TracingRecordTable ref={setRootContainerElement}/>
-                          </Match>
-                        </Switch>
+                        <Show when={useContext(CurTracePath)[0]()} keyed={true}>
+                          {(path: TracePathItem[]) => {
+                            let spanTId = path.length > 0 ? path.at(-1).record.record.spanTId : null;
+                            let isEnd = () => path.length > 0 ? path.at(-1).record.end != null : false;
+                            let appRunId = path.length > 0 ? path[0].record.record.appRunId : null;
+                            return <Switch>
+                              <Match when={tracingTreeFilter.showMode == "Tree"}>
+                                <TracingTreeItemList ref={setRootContainerElement} layer={path.length}
+                                                     isEnd={isEnd} path={path}
+                                                     spanTId={spanTId} appRunId={appRunId}
+                                                     class="overflow-hidden overflow-y-scroll"/>
+                              </Match>
+                              <Match when={tracingTreeFilter.showMode == "Flatten"}>
+                                <TracingRecordTable appRunId={appRunId} spanTId={spanTId}
+                                                    ref={setRootContainerElement}/>
+                              </Match>
+                            </Switch>
+                          }}
+                        </Show>
                       </Suspense>
                     </div>
                   </div>
@@ -700,10 +768,10 @@ function PropertyExpandableRow(allProps: {
   return (
     <>
       <tr {...rootProps}
-          class={cn("leading-8 border-b bg-gray-50 border-gray-400 border-b-gray-100 hover:bg-stone-50", rootProps.class)}
+          class={cn("leading-8 border-b  border-b-gray-100 hover:bg-stone-50", rootProps.class)}
           onClick={() => setIsExpand(n => !n)}>
         <td
-          class={cn("w-[1%] select-none text-xsm font-bold pl-1 pr-1 min-w-[100px] text-left whitespace-nowrap", props.labelContainerClass)}>
+          class={cn("w-[1%] select-none text-xsm font-bold pl-1 pr-1 min-w-[100px] text-left whitespace-nowrap text-nowrap overflow-hidden", props.labelContainerClass)}>
           <ChevronRight class={"inline-block mr-1 transition-transform"} classList={{"rotate-90": isExpand()}}
                         size={15}/>
           {props.label}
@@ -829,7 +897,8 @@ function SelectedDetail(allProps: { data: SelectedTreeItem } & HTMLAttributes<HT
                 <Show
                   when={![TracingKind.AppStart, TracingKind.AppStop as TracingKind].includes(record.record.kind)}>
                   <PropertyExpandableRow defaultIsExpand={false} label={"CodeInfo"}
-                                         tailing={<div>{record.record.positionInfo}</div>}>
+                                         tailing={<div
+                                           class={"text-ellipsis overflow-hidden whitespace-nowrap"}>{record.record.positionInfo}</div>}>
                     <PropertyTable class={""}>
                       <PropertyRow label={"Target"}>{record.record.target}</PropertyRow>
                       <PropertyRow label={"ModulePath"}>{record.record.modulePath}</PropertyRow>
@@ -838,6 +907,24 @@ function SelectedDetail(allProps: { data: SelectedTreeItem } & HTMLAttributes<HT
                       {/*<PropertyRow label={"ParentSpanId"}>{record.record.parentId}</PropertyRow>*/}
                     </PropertyTable>
                   </PropertyExpandableRow>
+                </Show>
+                <Show when={Object.keys(record.record.fields ?? {}).length != 0}>
+                  <PropertyExpandableRow
+                    defaultIsExpand={true}
+                    label={"Fields"}>
+                    <PropertyTable class={""}>
+                      <TracingFields object={record.record.fields}></TracingFields>
+                    </PropertyTable>
+                  </PropertyExpandableRow>
+                </Show>
+                <Show
+                  when={(record.variant as TracingTreeRecordVariantDtoOneOf)?.spanRun}>
+                  {n => <PropertyExpandableRow class={cn(Object.entries(n().fields).length == 0 && "hidden")}
+                                               defaultIsExpand={true} label={"SpanLatestRecordFields"}>
+                    <PropertyTable>
+                      <TracingFields object={n().fields}></TracingFields>
+                    </PropertyTable>
+                  </PropertyExpandableRow>}
                 </Show>
                 <Switch>
                   <Match when={record.record.kind == TracingKind.SpanCreate}>
@@ -887,24 +974,8 @@ function SelectedDetail(allProps: { data: SelectedTreeItem } & HTMLAttributes<HT
                         </Show>
                       </PropertyTable>
                     </PropertyExpandableRow>
-                    <PropertyExpandableRow defaultIsExpand={true} label={"SpanLatestRecordFields"}>
-                      <Show
-                        when={(record.variant as TracingTreeRecordVariantDtoOneOf)?.spanRun}>
-                        {n => <PropertyTable class={""}>
-                          <TracingFields object={n().fields}></TracingFields>
-                        </PropertyTable>}
-                      </Show>
-                    </PropertyExpandableRow>
                   </Match>
                 </Switch>
-                <Show when={Object.keys(record.record.fields ?? {}).length != 0}>
-                  <PropertyExpandableRow
-                    defaultIsExpand={true}
-                    label={"Fields"}>
-                    <PropertyTable class={""}>
-                      <TracingFields object={record.record.fields}></TracingFields>
-                    </PropertyTable>
-                  </PropertyExpandableRow></Show>
               </PropertyTable>
               <PropertyExpandableRow childrenContainerClass={""} defaultIsExpand={false} label={"Other"}>
                 <PropertyTable class={""}>
@@ -1001,7 +1072,7 @@ function TracingSpanEnterList(all_props: {
              ref={elementRef}>
           <Show
             when={!data().more_loading && !actions.notMoreOlderData()}>
-            <Button variant={'ghost'} class={"flex-shrink-0"} size="sm" ref={fetchMoreMarketElement}
+            <Button variant={'ghost'} class={"flex-shrink-0 border"} size="sm" ref={fetchMoreMarketElement}
                     onClick={async () => {
                       // let element = (fetchMoreMarketElement as HTMLElement).nextElementSibling
                       let rc = traceTreeInfo.rootContainerElement();
@@ -1028,7 +1099,8 @@ function TracingSpanEnterList(all_props: {
 
           <Show
             when={!data().is_end}>
-            <Button variant={'ghost'} class={"flex-shrink-0"} size="sm" ref={fetchMoreMarketElement}
+            <Button variant={'ghost'} class={cn("flex-shrink-0 border", data().more_loading && "hidden")} size="sm"
+                    ref={fetchMoreMarketElement}
                     onClick={async () => {
                       // let element = (fetchMoreMarketElement as HTMLElement).nextElementSibling
                       // let rc = traceTreeInfo.rootContainerElement();
@@ -1098,7 +1170,7 @@ function TracingSpanFieldList(all_props: {
 
           <Show
             when={!data().more_loading && !actions.notMoreOlderData()}>
-            <Button variant={'ghost'} class={"flex-shrink-0"} size="sm" ref={fetchMoreMarketElement}
+            <Button variant={'ghost'} class={"flex-shrink-0 border"} size="sm" ref={fetchMoreMarketElement}
                     onClick={async () => {
                       // let element = (fetchMoreMarketElement as HTMLElement).nextElementSibling
                       let rc = traceTreeInfo.rootContainerElement();
@@ -1124,7 +1196,8 @@ function TracingSpanFieldList(all_props: {
 
           <Show
             when={!data().is_end}>
-            <Button variant={'ghost'} class={"flex-shrink-0"} size="sm" ref={fetchMoreMarketElement}
+            <Button variant={'ghost'} class={cn("flex-shrink-0 border", data().more_loading && "hidden")} size="sm"
+                    ref={fetchMoreMarketElement}
                     onClick={async () => {
                       // let element = (fetchMoreMarketElement as HTMLElement).nextElementSibling
                       // let rc = traceTreeInfo.rootContainerElement();
@@ -1244,11 +1317,14 @@ function ExpandablePanel(props: {
   header: (_isExpand: Accessor<boolean>) => JSX.Element,
   defaultIsExpand?: boolean,
   children?: JSX.Element,
+  onExpand?: () => void,
   headerContainerProps?: HTMLAttributes<HTMLDivElement>
 }) {
   let [isExpand, setIsExpand] = createSignal(props.defaultIsExpand ?? false);
   return <>
-    <div {...props.headerContainerProps} onClick={() => setIsExpand(n => !n)}>
+    <div {...props.headerContainerProps} onClick={() => {
+      startTransition(() => setIsExpand(n => !n)).then(() => props.onExpand?.());
+    }}>
       {props.header(isExpand)}
     </div>
     <Show when={isExpand()}>
@@ -1320,7 +1396,7 @@ function TracingTreeItemList(allProps: {
   let moreBtn = () =>
     <Show
       when={!isRoot && !data().more_loading && !actions.notMoreOlderData()}>
-      <Button variant={'ghost'} class={"flex-shrink-0"} size="sm" ref={fetchMoreMarketElement}
+      <Button variant={'ghost'} class={"flex-shrink-0 border"} size="sm" ref={fetchMoreMarketElement}
               onClick={async () => {
                 // let element = (fetchMoreMarketElement as HTMLElement).nextElementSibling
                 let rc = rootContainerElement();
@@ -1334,9 +1410,10 @@ function TracingTreeItemList(allProps: {
       </Button>
     </Show>;
   let first = true;
+  let appScrollEndMarker:HTMLDivElement;
   return (
     <Show when={data() != null}>
-      <div {...forwardProps} class={cn("flex flex-col gap-1 pb-1.5 pt-1", forwardProps.class)} ref={setElementRef}>
+      <div {...forwardProps} class={cn("flex flex-col gap-1 pb-1.5 pt-1.5", forwardProps.class)} ref={setElementRef}>
         <Show when={data().more_loading}>
           <Loading/>
         </Show>
@@ -1357,27 +1434,29 @@ function TracingTreeItemList(allProps: {
         {/*</For>*/}
         <Show when={isRoot && offlineAppRuns().length > 0}>
           <ExpandablePanel headerContainerProps={{
-            class: "flex-shrink-0",
+            class: "flex-shrink-0 mb-1",
             style: {height: `${ITEM_HEIGHT}px`}
+          }} onExpand={() => {
+            appScrollEndMarker.scrollIntoView()
           }} header={(isExpand) => {
             return <div class={"absolute"} style={{width: elementBounds?.width ? `${elementBounds.width}px` : 'auto'}}>
               <div
                 class={"flex sticky px-4 justify-between w-full border border-gray-100 bg-background z-10 items-center gap-2 leading-8 select-none hover:bg-stone-50"}
                 style={{height: `${ITEM_HEIGHT}px`}}>
 
-                <div class="p-1 -mx-1 rounded-sm cursor-pointer hover:bg-stone-200">
-                  <ChevronRight class="transition-transform" classList={{
-                    "rotate-90": isExpand(),
+                <div class={"flex-grow"}></div>
+                <div class="p-1 -mx-1 rounded-sm">
+                  <ChevronDown class="transition-transform" classList={{
+                    "rotate-180": isExpand(),
                     // "text-gray-400": props.data.record.fields[RECORD_FIELDS.empty_children] == true,
                   }} size={15}/>
                 </div>
-                <div>Expand App Run History</div>
+                <div class={""}>Expand App Run History ( {offlineAppRuns().length} )</div>
                 <div class={"flex-grow"}></div>
-                <div>{offlineAppRuns().length}</div>
               </div>
             </div>
           }}>
-            <div class={"ml-4 flex flex-col gap-1 pb-1.5 pt-1"}>
+            <div class={"flex flex-col gap-1 pb-1.5 pt-1"}>
               {moreBtn()}
               <Key each={offlineAppRuns().map((n, i) => {
                 let r = {
@@ -1395,6 +1474,7 @@ function TracingTreeItemList(allProps: {
                                          defaultIsExpand={n().defaultIsExpand}
                                          data={n().item} isEnd={() => n().item.end != null || props.isEnd()}/>}
               </Key>
+              <div ref={appScrollEndMarker}></div>
             </div>
           </ExpandablePanel>
         </Show>
@@ -1417,15 +1497,10 @@ function TracingTreeItemList(allProps: {
 
         <Show
           when={!data().is_end}>
-          <Button variant={'ghost'} class={"flex-shrink-0"} size="sm" ref={fetchMoreMarketElement}
-                  onClick={async () => {
-                    // let element = (fetchMoreMarketElement as HTMLElement).nextElementSibling
-                    // let rc = traceTreeInfo.rootContainerElement();
-                    // let scrollBottom = rc.scrollHeight - rc.scrollTop;
+          <Button variant={'ghost'} class={cn("flex-shrink-0 border", data().more_loading && "hidden")} size="sm"
+                  ref={fetchMoreMarketElement}
+                  onClick={() => {
                     actions.fetchMore(data().records.at(-1).record.id);
-                    // rc.scrollTo({
-                    //   top: rc.scrollHeight - scrollBottom
-                    // })
                   }}>
             {t("common:loadMore")}
           </Button>
@@ -1433,21 +1508,6 @@ function TracingTreeItemList(allProps: {
             <Loading/>
           </Show>
         </Show>
-        {/*<VirtualList each={data().records.map((n, i, me) => {
-          return ({
-            item: n,
-            defaultIsExpand: props.layer == 0 && (me.length - 1) == i
-          })
-        })} fallback={<div class={"items-center justify-center p-2"}>无内容</div>}   overscanCount={5}
-                     rootHeight={32*10}
-                     rowHeight={32}>
-          {(n) => <TracingTreeItem isAppTable={props.isAppTable} layer={props.layer}
-                                   appRunId={props.appRunId}
-                                   defaultIsExpand={n.defaultIsExpand}
-                                   data={n.item} isEnd={() => n.item.end != null || props.isEnd()}
-                                   onMouseDown={() => setSelected(n.item)}
-                                   selected={() => selected()?.record.id == n.item.record.id}/>}
-        </VirtualList>*/}
       </div>
     </Show>
   )
@@ -1593,7 +1653,7 @@ function TracingTreeItemBase(allProps: {
   let leading: JSX.Element = props.leading ? props.leading(defaultLeading) : defaultLeading();
   return <div
     {...rootProps}
-    class={cn("flex bg-background z-10 items-center gap-2 px-1 leading-8 select-none", props.selected() ? "bg-stone-100" : "hover:bg-stone-50", props.needFixed() && "border-stone-200 z-30", rootProps.class)}>
+    class={cn("flex bg-background z-10 items-center gap-2 px-1 leading-8 select-none", rootProps.class, props.selected() ? "bg-stone-100" : "hover:bg-stone-50", props.needFixed() && "border border-stone-200 z-30")}>
     {leading}
     {props.children}
     <div class="flex-grow self-stretch"/>
@@ -1649,7 +1709,12 @@ function TracingTreeItem(allProps: {
   layer: number
 } & HTMLAttributes<HTMLDivElement>) {
   let [props, rootProps] = splitProps(allProps, ['data', 'defaultIsExpand', 'appRunId', 'layer', 'isAppTable', 'layer', 'isEnd', 'class', 'path']);
-  let [isExpand, setIsExpand] = createSignal((props.defaultIsExpand || getFlags(props.data.record, AUTO_EXPAND)) ?? false);
+  let [isExpand, setIsExpand] = makePersisted(createSignal(props.defaultIsExpand || (getFlags(props.data.record, AUTO_EXPAND) ?? false)), {
+    name: `ed-${props.data.record.id}`,
+    storage: useSearchParamStorage(),
+    serialize: n => n ? "1" : undefined,
+    deserialize: n => n == "1"
+  });
   let [target, setTarget] = createSignal<HTMLElement>();
   let [itemTarget, setItemTarget] = createSignal<HTMLElement>();
   let needFixed = () => false;
@@ -1935,8 +2000,9 @@ function TracingRunTimer(props: {
 
 function TracingRecordTable(all_props: {
   appRunId?: string
+  spanTId?: string,
 } & HTMLAttributes<HTMLTableElement>) {
-  let [props, rootProps] = splitProps(all_props, ['appRunId']);
+  let [props, rootProps] = splitProps(all_props, ['appRunId', 'spanTId']);
 
   let {rootContainerElement, filter, search} = useContext(CurTraceTreeInfo);
   let curSelected = useCurSelectedTreeItem();
@@ -1947,7 +2013,7 @@ function TracingRecordTable(all_props: {
     filter,
     search,
     spanTId: () => null,
-    parentSpanTId: () => null,
+    parentSpanTId: () => props.spanTId,
     onLivedAdded() {
       // if (filter.scrollToBottomWhenAdded) {
       //   rootContainerElement().scrollTo({

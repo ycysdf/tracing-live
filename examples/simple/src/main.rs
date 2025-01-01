@@ -1,6 +1,6 @@
 use tracing::{info, info_span, warn};
 use tracing_lv::TLSubscriberExt;
-use tracing_lv_core::TLAppInfo;
+use tracing_lv::TLAppInfo;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

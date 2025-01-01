@@ -7,6 +7,7 @@ use crate::grpc_service::{
 use crate::record::{AppRunInfo, SpanCacheId, SpanId, TracingKind, TracingRecordVariant};
 use chrono::{DateTime, FixedOffset, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeDelta, Utc};
 use entity::app_build::{ActiveModel, Column};
+use entity::tracing_record::Model;
 use entity::tracing_span::Entity;
 use entity::*;
 use sea_orm::prelude::{BigDecimal, Decimal, Expr, Json, RcOrArc, StringLen};
@@ -471,7 +472,10 @@ pub enum TracingRecordScene {
     SpanField,
     SpanEnter,
 }
-
+#[derive(Default, Clone, Debug, Deserialize, IntoParams, ToSchema)]
+pub struct QueryTracingRecordByIds {
+    pub ids: Vec<BigInt>,
+}
 #[derive(Default, Clone, Debug, Deserialize, IntoParams, ToSchema)]
 pub struct TracingRecordFilter {
     pub cursor: Option<CursorInfo>,
@@ -754,12 +758,11 @@ impl TracingService {
             .map(|n| n.into()))
     }
 
-    pub async fn list_tree_records(
+    async fn record_item_to_tree_record(
         &self,
-        filter: TracingRecordFilter,
+        records: Vec<TracingRecordDto>,
+        app_run_ids: Option<SmallVec<[Uuid; 2]>>,
     ) -> Result<impl Iterator<Item = TracingTreeRecordDto>, DbErr> {
-        let app_run_ids = filter.app_run_ids.clone();
-        let records: Vec<_> = self.list_records(filter).await?.collect();
         let (span_enter_infos, span_run_infos, related_records, app_run_infos) = join!(
             self.list_records_span_enter_infos(
                 records
@@ -809,8 +812,7 @@ impl TracingService {
             let variant = if n.kind == TracingKind::SpanCreate {
                 span_run_infos.remove(&n.id).map(|mut a| {
                     if let Some(span_t_id) = n.span_t_id.as_ref() {
-                        a.related_events =
-                            related_records.remove(span_t_id).unwrap_or_default();
+                        a.related_events = related_records.remove(span_t_id).unwrap_or_default();
                     }
                     TracingTreeRecordVariantDto::SpanRun(a)
                 })
@@ -841,6 +843,24 @@ impl TracingService {
         }))
     }
 
+    pub async fn list_tree_records(
+        &self,
+        filter: TracingRecordFilter,
+    ) -> Result<impl Iterator<Item = TracingTreeRecordDto>, DbErr> {
+        let app_run_ids = filter.app_run_ids.clone();
+        let records: Vec<_> = self.list_records(filter).await?.collect();
+        self.record_item_to_tree_record(records, app_run_ids).await
+    }
+    pub async fn list_tree_records_by_ids(
+        &self,
+        ids: impl IntoIterator<Item = BigInt>,
+    ) -> Result<impl Iterator<Item = TracingTreeRecordDto>, DbErr> {
+        let records: Vec<_> = self.list_records_by_ids(ids).await?.collect();
+        let app_run_ids: SmallVec<[Uuid; 2]> = records.iter().map(|n| n.app_run_id).collect();
+        self.record_item_to_tree_record(records, Some(app_run_ids))
+            .await
+    }
+
     pub async fn record_introspection(&self) -> Result<TableInfo, DbErr> {
         use tracing_record::*;
         Ok(TableInfo {
@@ -865,6 +885,18 @@ impl TracingService {
             .one(&self.dc)
             .await?;
         Ok(option.map(|n| n.id))
+    }
+    pub async fn list_records_by_ids(
+        &self,
+        ids: impl IntoIterator<Item = BigInt>,
+    ) -> Result<impl Iterator<Item = TracingRecordDto>, DbErr> {
+        use tracing_record::*;
+        Ok(Entity::find()
+            .filter(Column::Id.is_in(ids))
+            .all(&self.dc)
+            .await?
+            .into_iter()
+            .map(|n| n.into()))
     }
 
     pub async fn list_records(
@@ -1025,60 +1057,7 @@ impl TracingService {
             records.reverse();
             records
         };
-        Ok(records.into_iter().map(|n| {
-            let (span_id_is_stable, span_t_id, repeated_count, fields) =
-                if let Some(value) = n.fields {
-                    let serde_json::Value::Object(mut fields) = value else {
-                        unreachable!()
-                    };
-
-                    (
-                        fields.remove(FIELD_DATA_STABLE_SPAN_ID).is_some(),
-                        fields
-                            .remove(FIELD_DATA_SPAN_T_ID)
-                            .map(|n| n.as_u64().map(|n| n.to_smolstr()))
-                            .flatten(),
-                        fields
-                            .remove(FIELD_DATA_REPEATED_COUNT)
-                            .map(|n| n.as_u64().map(|n| n as u32))
-                            .flatten(),
-                        fields,
-                    )
-                } else {
-                    (false, None, None, Default::default())
-                };
-            TracingRecordDto {
-                id: n.id,
-                app_id: n.app_id,
-                app_version: n.app_version.into(),
-                app_run_id: n.app_run_id,
-                node_id: n.node_id.into(),
-                name: n.name.into(),
-                kind: n.kind.parse().unwrap(),
-                level: n
-                    .level
-                    .map(|n| {
-                        tracing_lv_core::proto::Level::try_from(n)
-                            .ok()
-                            .map(|n| n.into())
-                    })
-                    .flatten(),
-                span_id: n.span_id,
-                fields: Arc::new(fields),
-                target: n.target.map(|n| n.into()),
-                module_path: n.module_path.map(|n| n.into()),
-                position_info: n.position_info.map(|n| n.into()),
-                record_time: n.record_time,
-                creation_time: n.creation_time,
-                span_id_is_stable: Some(span_id_is_stable),
-                parent_id: n.parent_id,
-                span_t_id,
-                parent_span_t_id: n
-                    .parent_span_t_id
-                    .map(|n| u64::from_le_bytes(n.to_le_bytes()).to_smolstr()),
-                repeated_count,
-            }
-        }))
+        Ok(records.into_iter().map(|n| n.into()))
     }
 
     pub async fn list_tracing_span_field_names(
@@ -1702,3 +1681,59 @@ impl From<&TracingTreeRecordDto> for Option<AppRunDto> {
 //         })
 //     }
 // }
+
+impl From<tracing_record::Model> for TracingRecordDto {
+    fn from(n: Model) -> Self {
+        let (span_id_is_stable, span_t_id, repeated_count, fields) = if let Some(value) = n.fields {
+            let serde_json::Value::Object(mut fields) = value else {
+                unreachable!()
+            };
+
+            (
+                fields.remove(FIELD_DATA_STABLE_SPAN_ID).is_some(),
+                fields
+                    .remove(FIELD_DATA_SPAN_T_ID)
+                    .map(|n| n.as_u64().map(|n| n.to_smolstr()))
+                    .flatten(),
+                fields
+                    .remove(FIELD_DATA_REPEATED_COUNT)
+                    .map(|n| n.as_u64().map(|n| n as u32))
+                    .flatten(),
+                fields,
+            )
+        } else {
+            (false, None, None, Default::default())
+        };
+        TracingRecordDto {
+            id: n.id,
+            app_id: n.app_id,
+            app_version: n.app_version.into(),
+            app_run_id: n.app_run_id,
+            node_id: n.node_id.into(),
+            name: n.name.into(),
+            kind: n.kind.parse().unwrap(),
+            level: n
+                .level
+                .map(|n| {
+                    tracing_lv_core::proto::Level::try_from(n)
+                        .ok()
+                        .map(|n| n.into())
+                })
+                .flatten(),
+            span_id: n.span_id,
+            fields: Arc::new(fields),
+            target: n.target.map(|n| n.into()),
+            module_path: n.module_path.map(|n| n.into()),
+            position_info: n.position_info.map(|n| n.into()),
+            record_time: n.record_time,
+            creation_time: n.creation_time,
+            span_id_is_stable: Some(span_id_is_stable),
+            parent_id: n.parent_id,
+            span_t_id,
+            parent_span_t_id: n
+                .parent_span_t_id
+                .map(|n| u64::from_le_bytes(n.to_le_bytes()).to_smolstr()),
+            repeated_count,
+        }
+    }
+}

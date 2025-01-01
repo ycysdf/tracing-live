@@ -95,6 +95,10 @@ export interface ListTreeRecordsRequest {
     levels?: Array<TracingLevel> | null;
 }
 
+export interface ListTreeRecordsByIdsRequest {
+    ids: Array<number>;
+}
+
 export interface NodesPageRequest {
     after_record_id?: number;
     app_build_ids?: Array<Array<any>> | null;
@@ -346,6 +350,41 @@ export class DefaultApi extends runtime.BaseAPI {
      */
     async listTreeRecords(requestParameters: ListTreeRecordsRequest = {}, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<Array<TracingTreeRecordDto>> {
         const response = await this.listTreeRecordsRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     */
+    async listTreeRecordsByIdsRaw(requestParameters: ListTreeRecordsByIdsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<Array<TracingTreeRecordDto>>> {
+        if (requestParameters['ids'] == null) {
+            throw new runtime.RequiredError(
+                'ids',
+                'Required parameter "ids" was null or undefined when calling listTreeRecordsByIds().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        if (requestParameters['ids'] != null) {
+            queryParameters['ids'] = requestParameters['ids'];
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        const response = await this.request({
+            path: `/api/v1/records/tree_by_ids`,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response, (jsonValue) => jsonValue.map(TracingTreeRecordDtoFromJSON));
+    }
+
+    /**
+     */
+    async listTreeRecordsByIds(requestParameters: ListTreeRecordsByIdsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<Array<TracingTreeRecordDto>> {
+        const response = await this.listTreeRecordsByIdsRaw(requestParameters, initOverrides);
         return await response.value();
     }
 
