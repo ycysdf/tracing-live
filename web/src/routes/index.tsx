@@ -101,7 +101,7 @@ export function Nav() {
     },
   ]
   let height = 48;
-  let [isCollapse, setIsCollapse] = makePersisted(createSignal(false), {name: 'navIsCollapse'});
+  let [isCollapse, setIsCollapse] = makePersisted(createSignal(true), {name: 'navIsCollapse'});
   return (
     <div
       class="border-r-gray-200 transition-[width] bg-background shadow-sm flex flex-col justify-between py-2 h-screen"

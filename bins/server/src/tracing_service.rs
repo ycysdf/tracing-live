@@ -786,7 +786,10 @@ impl TracingService {
                         .iter()
                         .filter(|n| n.kind == TracingKind::SpanCreate
                             && n.fields.contains_key(FIELD_DATA_IS_CONTAINS_RELATED))
-                        .filter_map(|n| n.span_t_id.as_ref().map(|n| n.parse().ok()).flatten())
+                        .filter_map(|n| {
+                        let r = n.span_t_id.as_ref().map(|n| n.parse().ok()).flatten();
+                        r
+                    })
                         .collect()
                 ),
                 ..Default::default()
@@ -922,7 +925,9 @@ impl TracingService {
                         Column::ParentSpanTId.eq(i64::from_le_bytes(span_t_id[0].to_le_bytes())),
                     ),
                     0 => n,
-                    _ => n.filter(Column::ParentSpanTId.is_in(span_t_id)),
+                    _ => n.filter(Column::ParentSpanTId.is_in(span_t_id.into_iter().map(|n| {
+                        i64::from_le_bytes(n.to_le_bytes())
+                    }))),
                 }
             })
             .apply_if(filter.start_time, |n, start_time| {

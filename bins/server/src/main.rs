@@ -61,7 +61,7 @@ async fn main() -> anyhow::Result<()> {
     program_panic_catch();
 
     let database_url = env::var("DATABASE_URL")
-        .unwrap_or("postgresql://postgres:123456@127.0.0.1:5432/postgres".into());
+        .unwrap_or("postgresql://postgres:123456@127.0.0.1:5432/tracing".into());
     let dc = Database::connect(ConnectOptions::new(database_url.as_str()))
         .instrument(info_span!("connect db", database_url))
         .await
@@ -70,6 +70,7 @@ async fn main() -> anyhow::Result<()> {
     let tracing_service = TracingService::new(dc.clone());
 
     let (msg_sender, msg_receiver) = flume::unbounded::<RunMsg>();
+    tracing_service.init().await?;
     {
         let tracing_service = tracing_service.clone();
         let msg_sender = msg_sender.clone();
@@ -111,7 +112,6 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    tracing_service.init().await?;
 
     let handle_records_future = tokio::spawn({
         let tracing_service = tracing_service.clone();
