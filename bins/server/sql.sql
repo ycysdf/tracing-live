@@ -100,12 +100,13 @@ create table tracing_span_enter
 
 create index tracing_record_fields on tracing_record using gin (fields);
 
-create unique index tracing_record_unique_id on tracing_record (id, record_time);
--- create index tracing_record_id on tracing_record (id);
+-- create unique index tracing_record_unique_id on tracing_record (id, record_time);
+create index tracing_record_id on tracing_record (id);
 create index tracing_record_app_id on tracing_record (app_id);
-create index tracing_record_app_build_id on tracing_record (app_version);
+-- create index tracing_record_app_build_id on tracing_record (app_version);
 create index tracing_record_app_run_id on tracing_record (app_run_id);
 create index tracing_record_name on tracing_record using hash (name);
+create index tracing_record_node_id on tracing_record (node_id);
 create index tracing_record_kind on tracing_record (kind);
 create index tracing_record_level on tracing_record (level);
 create index tracing_record_parent_span_t_id on tracing_record (parent_span_t_id);
