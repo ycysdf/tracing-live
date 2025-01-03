@@ -91,6 +91,8 @@ pub async fn default_connect(
     Endpoint::new(endpoint)?
         .executor(NoSubscriberExecutor)
         // .tcp_nodelay(false)
+        .buffer_size(1024 * 1024 * 8)
+        .keep_alive_while_idle(true)
         .keep_alive_timeout(Duration::from_secs(120))
         .connect()
         .await
@@ -297,6 +299,7 @@ where
 
         let mut client = TracingServiceClient::new(NoSubscriberService(channel))
             .send_compressed(CompressionEncoding::Zstd)
+            .max_decoding_message_size(usize::MAX)
             .accept_compressed(CompressionEncoding::Zstd);
         let (msg_sender, msg_receiver) = flume::unbounded();
         {
