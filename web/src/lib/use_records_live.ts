@@ -51,7 +51,6 @@ export function useRecordsTreeLive(options: {
   let count = options.count ?? 50;
   let recordsRequest = createMemo<ListTreeRecordsRequest>(() => {
     let spanTId = options.spanTId();
-    let parentSpanTId = options.parentSpanTId();
     let scene = options.scene();
     let appRunId = options.appRunId ? options.appRunId() : null;
     let fields = [];
@@ -65,11 +64,6 @@ export function useRecordsTreeLive(options: {
       parent_span_t_ids: options.parentSpanTId() != null ? [options.parentSpanTId() as any] : [],
       search: options.search ? options.search() : undefined,
     };
-    if (parentSpanTId == null) {
-      if (scene == "Tree") {
-        param.parent_id = NULL_UUID;
-      }
-    }
     if (spanTId != null) {
       param.parent_id = undefined;
       fields.push({

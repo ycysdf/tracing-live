@@ -787,9 +787,9 @@ impl TracingService {
                         .filter(|n| n.kind == TracingKind::SpanCreate
                             && n.fields.contains_key(FIELD_DATA_IS_CONTAINS_RELATED))
                         .filter_map(|n| {
-                        let r = n.span_t_id.as_ref().map(|n| n.parse().ok()).flatten();
-                        r
-                    })
+                            let r = n.span_t_id.as_ref().map(|n| n.parse().ok()).flatten();
+                            r
+                        })
                         .collect()
                 ),
                 ..Default::default()
@@ -925,9 +925,13 @@ impl TracingService {
                         Column::ParentSpanTId.eq(i64::from_le_bytes(span_t_id[0].to_le_bytes())),
                     ),
                     0 => n,
-                    _ => n.filter(Column::ParentSpanTId.is_in(span_t_id.into_iter().map(|n| {
-                        i64::from_le_bytes(n.to_le_bytes())
-                    }))),
+                    _ => n.filter(
+                        Column::ParentSpanTId.is_in(
+                            span_t_id
+                                .into_iter()
+                                .map(|n| i64::from_le_bytes(n.to_le_bytes())),
+                        ),
+                    ),
                 }
             })
             .apply_if(filter.start_time, |n, start_time| {
@@ -953,21 +957,23 @@ impl TracingService {
                 TracingRecordScene::SpanField => n,
                 TracingRecordScene::SpanEnter => n,
             });
-        let mut condition = Cond::any();
-        for (app_id, version) in filter.app_build_ids.unwrap_or_default() {
-            condition = condition.add(match version {
-                None => Column::AppId.eq(app_id),
-                Some(version) => Column::AppId.eq(app_id).and(Column::AppVersion.eq(version)),
-            });
-        }
-        if !condition.is_empty() {
-            select = select.filter(condition);
-        }
-        if let Some(node_ids) = filter.node_ids {
-            select = match node_ids.len() {
-                1 => select.filter(Column::NodeId.eq(node_ids[0].as_str())),
-                0 => select,
-                _ => select.filter(Column::NodeId.is_in(node_ids)),
+        if !filter.app_run_ids.as_ref().is_some_and(|n| !n.is_empty()) {
+            let mut condition = Cond::any();
+            for (app_id, version) in filter.app_build_ids.unwrap_or_default() {
+                condition = condition.add(match version {
+                    None => Column::AppId.eq(app_id),
+                    Some(version) => Column::AppId.eq(app_id).and(Column::AppVersion.eq(version)),
+                });
+            }
+            if !condition.is_empty() {
+                select = select.filter(condition);
+            }
+            if let Some(node_ids) = filter.node_ids {
+                select = match node_ids.len() {
+                    1 => select.filter(Column::NodeId.eq(node_ids[0].as_str())),
+                    0 => select,
+                    _ => select.filter(Column::NodeId.is_in(node_ids)),
+                }
             }
         }
         if let Some(app_run_ids) = filter.app_run_ids {
