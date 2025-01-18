@@ -15,5 +15,5 @@ pub use tonic::*;
 mod tracing_layer;
 
 pub use tracing_layer::*;
-#[cfg(any(feature = "build-proto", not(feature = "build-proto-dev")))]
+#[cfg(all(feature = "build-proto", not(feature = "build-proto-dev")))]
 ::tonic::include_proto!("tracing");

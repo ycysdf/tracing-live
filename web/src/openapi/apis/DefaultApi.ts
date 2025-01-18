@@ -51,7 +51,7 @@ import {
 
 export interface ListNodesRequest {
     main_app_id?: string | null;
-    after_record_id?: number;
+    after_record_time?: Date | null;
     app_build_ids?: Array<Array<any>> | null;
 }
 
@@ -100,7 +100,7 @@ export interface ListTreeRecordsByIdsRequest {
 }
 
 export interface NodesPageRequest {
-    after_record_id?: number;
+    after_record_time?: Date | null;
     app_build_ids?: Array<Array<any>> | null;
 }
 
@@ -142,8 +142,8 @@ export class DefaultApi extends runtime.BaseAPI {
             queryParameters['main_app_id'] = requestParameters['main_app_id'];
         }
 
-        if (requestParameters['after_record_id'] != null) {
-            queryParameters['after_record_id'] = requestParameters['after_record_id'];
+        if (requestParameters['after_record_time'] != null) {
+            queryParameters['after_record_time'] = (requestParameters['after_record_time'] as any).toISOString();
         }
 
         if (requestParameters['app_build_ids'] != null) {
@@ -393,8 +393,8 @@ export class DefaultApi extends runtime.BaseAPI {
     async nodesPageRaw(requestParameters: NodesPageRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<NodesPageDto>> {
         const queryParameters: any = {};
 
-        if (requestParameters['after_record_id'] != null) {
-            queryParameters['after_record_id'] = requestParameters['after_record_id'];
+        if (requestParameters['after_record_time'] != null) {
+            queryParameters['after_record_time'] = (requestParameters['after_record_time'] as any).toISOString();
         }
 
         if (requestParameters['app_build_ids'] != null) {

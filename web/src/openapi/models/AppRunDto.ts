@@ -78,7 +78,7 @@ export interface AppRunDto {
      * @type {number}
      * @memberof AppRunDto
      */
-    stopRecordId?: number;
+    stopRecordId?: number | null;
     /**
      * 
      * @type {Date}

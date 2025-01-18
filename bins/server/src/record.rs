@@ -124,7 +124,7 @@ pub enum TracingRecordVariant {
 
 impl TracingRecordVariant {
     #[inline(always)]
-    pub fn get_dto(&self, record_id: BigInt) -> TracingRecordDto {
+    pub fn get_dto(&self, record_id: u64) -> TracingRecordDto {
         TracingRecordDto {
             id: record_id,
             app_id: self.app_info().id,
@@ -157,7 +157,7 @@ impl TracingRecordVariant {
     }
 
     #[inline(always)]
-    pub fn into_dto(mut self, record_id: BigInt) -> TracingRecordDto {
+    pub fn into_dto(mut self, record_id: u64) -> TracingRecordDto {
         TracingRecordDto {
             id: record_id,
             app_id: self.app_info().id,

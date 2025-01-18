@@ -12,7 +12,7 @@ import {
   Kanban,
   LayoutGrid,
   ListTree,
-  Logs,
+  Logs, Monitor,
   Settings
 } from "lucide-solid";
 import {makePersisted} from "@solid-primitives/storage";
@@ -78,8 +78,8 @@ export function Nav() {
     {
       name: t("node"),
       url: `node`,
-      icon: <LayoutGrid size={16} strokeWidth="1"/>,
-      activeIcon: <LayoutGrid size={16} strokeWidth="2"/>
+      icon: <Monitor size={16} strokeWidth="1"/>,
+      activeIcon: <Monitor size={16} strokeWidth="2"/>
     },
     {
       name: t("app"),

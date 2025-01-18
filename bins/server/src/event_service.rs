@@ -9,7 +9,7 @@ use crate::tracing_service::{TracingRecordDto, TracingTreeRecordDto};
 
 #[derive(Default)]
 pub struct EventService {
-    record_event_senders: Vec<(
+    pub record_event_senders: Vec<(
         flume::Sender<Arc<TracingTreeRecordDto>>,
         TracingRecordFilter,
         bool,
@@ -27,7 +27,7 @@ impl EventService {
     pub async fn notify(
        &mut self,
        item: TracingRecordVariant,
-       record_id: BigInt,
+       record_id: u64,
        variant_dto: Option<TracingTreeRecordVariantDto>,
     ) {
         for x in self.record_event_senders.iter_mut() {
@@ -41,7 +41,7 @@ impl EventService {
             });
         }
     }
-    pub fn add_record_event_sender(
+    pub fn add_record_watcher(
         &mut self,
         sender: flume::Sender<Arc<TracingTreeRecordDto>>,
         filter: TracingRecordFilter,

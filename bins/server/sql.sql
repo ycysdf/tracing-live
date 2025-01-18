@@ -1,6 +1,5 @@
 create table tracing_record
 (
---     id                   bigint      not null,
     app_run_record_index bigint      not null,
     app_id               uuid        not null,
     app_version          varchar(16) not null,
@@ -95,14 +94,13 @@ create table tracing_span_enter
     enter_time      timestamptz not null,
     duration        double precision,
     record_id       bigint      not null,
-    leave_record_id bigint      null,
-    foreign key (span_run_id) references tracing_span_run
+    leave_record_id bigint      null
 );
 
 create index tracing_record_fields on tracing_record using gin (fields);
 
 -- create unique index tracing_record_unique_id on tracing_record (id, record_time);
-create index tracing_record_id on tracing_record (id);
+create index tracing_record_record_index on tracing_record (app_run_record_index);
 create index tracing_record_app_id on tracing_record (app_id);
 -- create index tracing_record_app_build_id on tracing_record (app_version);
 create index tracing_record_app_run_id on tracing_record (app_run_id);

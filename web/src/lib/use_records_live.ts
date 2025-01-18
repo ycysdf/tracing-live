@@ -61,7 +61,7 @@ export function useRecordsTreeLive(options: {
       levels: options.filter.selectedLevels,
       app_build_ids: options.filter.selectedAppIds?.map(n => [n, null]),
       node_ids: options.filter.selectedNodeIds,
-      parent_span_t_ids: options.parentSpanTId() != null ? [options.parentSpanTId() as any] : [],
+      parent_span_t_ids: [options.parentSpanTId() as any ?? 0],
       search: options.search ? options.search() : undefined,
     };
     if (spanTId != null) {

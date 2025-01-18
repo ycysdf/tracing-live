@@ -1,8 +1,7 @@
-use std::path::Path;
-
 fn main() {
     #[cfg(feature = "build-proto")]
     {
+        use std::path::Path;
         use tonic_build::Config;
         println!("cargo:rerun-if-changed=proto/tracing.proto");
         let mut config = Config::new();

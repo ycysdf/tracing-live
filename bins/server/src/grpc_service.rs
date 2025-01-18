@@ -3,7 +3,7 @@ use crate::record::{AppRunInfo, SpanCacheId, SpanId, TracingKind, TracingRecordV
 use crate::related_event::{
     ErrSpanRelatedEvent, ReturnSpanRelatedEvent, SpanRelatedEvent, TowerHttpSpanRelatedEvent,
 };
-use crate::running_app::RunMsg;
+use crate::running_app::{AppRunMsg, RunMsg};
 use crate::tracing_service::{BigInt, TracingLevel, TracingRecordBatchInserter};
 use bitflags::bitflags;
 use bon::bon;
@@ -173,7 +173,7 @@ impl TracingFields {
 pub struct AppRunLifetime {
     tracing_service: crate::tracing_service::TracingService,
     #[allow(dead_code)]
-    pub record_sender: flume::Sender<RunMsg>,
+    pub record_sender: flume::Sender<AppRunMsg>,
     pub app_run_info: Arc<AppRunInfo>,
     pub app_start: AppStart,
     pub span_id_cache: lru::LruCache<SpanCacheId, SpanId>,
@@ -285,13 +285,13 @@ impl AppRunLifetime {
     pub async fn new(
         app_start: AppStart,
         tracing_service: crate::tracing_service::TracingService,
-        record_sender: flume::Sender<RunMsg>,
+        record_sender: flume::Sender<AppRunMsg>,
     ) -> Result<Self, Status> {
         let record = Self::app_start(app_start.clone()).await?;
         let app_run_info = record.app_info().clone();
         Span::current().record("record", debug(&record));
         Span::current().record("app_run_info", debug(&app_run_info));
-        let _ = record_sender.send(RunMsg::Record {
+        let _ = record_sender.send(AppRunMsg::Record {
             record_index: 0,
             variant: record,
         });
@@ -601,7 +601,7 @@ impl AppRunLifetime {
         });
         let _ = self
             .record_sender
-            .send(RunMsg::Record {
+            .send(AppRunMsg::Record {
                 record_index,
                 variant: TracingRecordVariant::AppStop {
                     record_time,
@@ -668,10 +668,11 @@ impl TracingService for TracingServiceImpl {
         };
         let half_rtt = app_start.rtt / 2.0;
         let span = info_span!(parent: self.span.id(),"app lifetime",?app_start);
+        let (app_run_record_sender, app_run_record_receiver) = flume::unbounded();
         let mut app_run_lifetime = AppRunLifetime::new(
             app_start,
             self.tracing_service.clone(),
-            self.record_sender.clone(),
+            app_run_record_sender,
         )
         .instrument(info_span!(parent:span.id(),"start",app_run_info="",record=""))
         .await?;
@@ -684,6 +685,14 @@ impl TracingService for TracingServiceImpl {
 
             GLOBAL_DATA.add_running_app(app_run_lifetime.app_run_info.run_id, delta_date_nanos);
         }
+
+        // TODO:
+        self.record_sender
+            .send(RunMsg::AppRun {
+                run_info: app_run_lifetime.app_run_info.clone(),
+                record_receiver: app_run_record_receiver,
+            })
+            .map_err(|_| Status::unavailable("empty message"))?;
 
         // Tonic Bug: ?. Future is sometimes canceled
         tokio::spawn(
@@ -701,17 +710,17 @@ impl TracingService for TracingServiceImpl {
                                 record_index,
                             }) => {
                                 error_count = 0;
-                                last_record_index = record_index;
                                 let variant = variant.unwrap();
                                 let variant = if let record_param::Variant::AppStop(_) = variant {
                                     info!("app stop");
                                     normal_stop = Some(send_time);
                                     break;
                                 } else {
+                                    last_record_index = record_index;
                                     app_run_lifetime.record(variant).await?
                                 };
                                 if let Err(err) =
-                                    app_run_lifetime.record_sender.send(RunMsg::Record {
+                                    app_run_lifetime.record_sender.send(AppRunMsg::Record {
                                         record_index,
                                         variant,
                                     })

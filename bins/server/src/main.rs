@@ -7,7 +7,6 @@ use std::time::Duration;
 use tokio::net::TcpListener;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Server;
-use tonic::Status;
 use tower_http::compression::CompressionLayer;
 use tracing::{info, info_span, instrument, warn, Instrument, Span};
 use tracing_lv_core::{
@@ -15,6 +14,8 @@ use tracing_lv_core::{
     proto::{record_param, RecordParam},
     MsgReceiverSubscriber, TLAppInfo, TLAppInfoExt, TLLayer,
 };
+use tracing_lv_server::running_app::{AppRunMsg, TLConfig};
+use tracing_lv_server::tracing_service::TracingRecordBatchInserter;
 use tracing_lv_server::{
     build,
     grpc_service::{AppRunLifetime, TracingServiceImpl},
@@ -74,6 +75,7 @@ async fn main() -> anyhow::Result<()> {
     {
         let tracing_service = tracing_service.clone();
         let msg_sender = msg_sender.clone();
+        let (app_run_msg_sender, app_run_msg_receiver) = flume::unbounded::<AppRunMsg>();
         tokio::spawn(async move {
             let fut = async move {
                 let app_info = TLAppInfo::new(
@@ -85,9 +87,13 @@ async fn main() -> anyhow::Result<()> {
                 let mut self_lifetime = AppRunLifetime::new(
                     app_info.into_app_start(Uuid::new_v4(), Duration::default()),
                     tracing_service,
-                    msg_sender,
+                    app_run_msg_sender,
                 )
                 .await?;
+                msg_sender.send(RunMsg::AppRun {
+                    run_info: self_lifetime.app_run_info.clone(),
+                    record_receiver: app_run_msg_receiver,
+                })?;
                 while let Ok(msg) = self_record_receiver.recv_async().await {
                     let variant = msg.variant.unwrap();
                     let record = if let record_param::Variant::AppStop(_) = variant {
@@ -96,7 +102,7 @@ async fn main() -> anyhow::Result<()> {
                     } else {
                         self_lifetime.record(variant).await?
                     };
-                    if let Err(err) = self_lifetime.record_sender.send(RunMsg::Record {
+                    if let Err(err) = self_lifetime.record_sender.send(AppRunMsg::Record {
                         record_index: msg.record_index,
                         variant: record,
                     }) {
@@ -112,20 +118,33 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-
     let handle_records_future = tokio::spawn({
         let tracing_service = tracing_service.clone();
-        let id = tracing_service
-            .query_last_record_id()
-            .await
-            .map_err(|err| Status::internal(format!("query_last_record_id error. {err}")))?
-            .unwrap_or(0);
         let max_buf_count = env::var("RECORD_MAX_BUF_COUNT")
             .ok()
             .map(|n| n.parse::<usize>().ok())
             .flatten();
         async move {
-            let mut running_apps = RunningApps::new(tracing_service, id, max_buf_count);
+            const POSTGRESQL_MAX_BIND_PARAM_COUNT: usize = 32767;
+            let max_buf_count_max_value =
+                POSTGRESQL_MAX_BIND_PARAM_COUNT / TracingRecordBatchInserter::BIND_COL_COUNT;
+            let record_max_buf_count = max_buf_count
+                .unwrap_or(max_buf_count_max_value)
+                .min(max_buf_count_max_value);
+
+            let mut running_apps = RunningApps::new(
+                tracing_service,
+                TLConfig {
+                    record_max_delay: Duration::from_millis(
+                        env::var("RECORD_MAX_DELAY")
+                            .ok()
+                            .map(|n| n.parse::<u64>().ok())
+                            .flatten()
+                            .unwrap_or(200),
+                    ),
+                    record_max_buf_count,
+                },
+            );
             running_apps.handle_records(msg_receiver).await
         }
         .instrument(info_span!("records handle task", max_buf_count))
@@ -201,7 +220,7 @@ async fn main() -> anyhow::Result<()> {
             r??
         }
         r = handle_records_future => {
-            r??
+            r?
         }
     })
 }

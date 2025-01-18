@@ -234,7 +234,8 @@ pub mod tracing_service_client {
         clippy::wildcard_imports,
         clippy::let_unit_value,
     )]
-    use tonic::codegen::*;
+    use alloc::format;
+use tonic::codegen::*;
     use tonic::codegen::http::Uri;
     #[derive(Debug, Clone)]
     pub struct TracingServiceClient<T> {

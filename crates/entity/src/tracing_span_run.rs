@@ -39,8 +39,6 @@ pub enum Relation {
         on_delete = "NoAction"
     )]
     TracingSpan,
-    #[sea_orm(has_many = "super::tracing_span_enter::Entity")]
-    TracingSpanEnter,
 }
 
 impl Related<super::app_run::Entity> for Entity {
@@ -52,12 +50,6 @@ impl Related<super::app_run::Entity> for Entity {
 impl Related<super::tracing_span::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::TracingSpan.def()
-    }
-}
-
-impl Related<super::tracing_span_enter::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::TracingSpanEnter.def()
     }
 }
 
