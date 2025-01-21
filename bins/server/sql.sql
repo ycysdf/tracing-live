@@ -1,5 +1,6 @@
 create table tracing_record
 (
+    id                   bigint      not null,
     app_run_record_index bigint      not null,
     app_id               uuid        not null,
     app_version          varchar(16) not null,

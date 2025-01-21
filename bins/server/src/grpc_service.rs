@@ -3,8 +3,9 @@ use crate::record::{AppRunInfo, SpanCacheId, SpanId, TracingKind, TracingRecordV
 use crate::related_event::{
     ErrSpanRelatedEvent, ReturnSpanRelatedEvent, SpanRelatedEvent, TowerHttpSpanRelatedEvent,
 };
-use crate::running_app::{AppRunMsg, RunMsg};
+use crate::running_app::{AppRunMsg, AppRunRecord, RunMsg};
 use crate::tracing_service::{BigInt, TracingLevel, TracingRecordBatchInserter};
+use crate::RECORD_ID_GENERATOR;
 use bitflags::bitflags;
 use bon::bon;
 use chrono::{DateTime, FixedOffset, Local, Utc};
@@ -291,10 +292,11 @@ impl AppRunLifetime {
         let app_run_info = record.app_info().clone();
         Span::current().record("record", debug(&record));
         Span::current().record("app_run_info", debug(&app_run_info));
-        let _ = record_sender.send(AppRunMsg::Record {
+        let _ = record_sender.send(AppRunMsg::Record(AppRunRecord {
+            id: RECORD_ID_GENERATOR.next(),
             record_index: 0,
             variant: record,
-        });
+        }));
         Ok(Self {
             app_start,
             tracing_service,
@@ -601,7 +603,8 @@ impl AppRunLifetime {
         });
         let _ = self
             .record_sender
-            .send(AppRunMsg::Record {
+            .send(AppRunMsg::Record(AppRunRecord {
+                id: RECORD_ID_GENERATOR.next(),
                 record_index,
                 variant: TracingRecordVariant::AppStop {
                     record_time,
@@ -609,7 +612,7 @@ impl AppRunLifetime {
                     name: self.app_start.name.into(),
                     exception_end,
                 },
-            })
+            }))
             .inspect_err(|err| {
                 error!(?err, "send app stop msg failed");
             });
@@ -689,6 +692,7 @@ impl TracingService for TracingServiceImpl {
         // TODO:
         self.record_sender
             .send(RunMsg::AppRun {
+                record_sender: app_run_lifetime.record_sender.clone(),
                 run_info: app_run_lifetime.app_run_info.clone(),
                 record_receiver: app_run_record_receiver,
             })
@@ -709,6 +713,7 @@ impl TracingService for TracingServiceImpl {
                                 variant,
                                 record_index,
                             }) => {
+                                println!("{:?} .record_index: {record_index}",app_run_lifetime.app_run_info.run_id);
                                 error_count = 0;
                                 let variant = variant.unwrap();
                                 let variant = if let record_param::Variant::AppStop(_) = variant {
@@ -719,12 +724,13 @@ impl TracingService for TracingServiceImpl {
                                     last_record_index = record_index;
                                     app_run_lifetime.record(variant).await?
                                 };
-                                if let Err(err) =
-                                    app_run_lifetime.record_sender.send(AppRunMsg::Record {
+                                if let Err(err) = app_run_lifetime.record_sender.send(
+                                    AppRunMsg::Record(AppRunRecord {
+                                        id: RECORD_ID_GENERATOR.next(),
                                         record_index,
                                         variant,
-                                    })
-                                {
+                                    }),
+                                ) {
                                     info!(?err, "record_sender send failed. exit!");
                                     break;
                                 }

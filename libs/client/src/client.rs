@@ -1,32 +1,35 @@
-use bytes::{BufMut, Bytes, BytesMut};
+use crate::persistence::{EncodeBytesSubscriber, RecordsPersistenceToFile, RECORD_BLOCK_SIZE, RWS};
+use binrw::BinResult;
+use bytes::{BufMut, Bytes};
 use chrono::Utc;
+use futures_util::{SinkExt, StreamExt};
 use hyper::Uri;
 use serde::{Deserialize, Serialize};
-use std::cell::RefCell;
 use std::future::Future;
-use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::PathBuf;
-use std::pin::Pin;
+use std::io::{Read, Seek, Write};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt, AsyncWrite, AsyncWriteExt};
+use tokio::sync::oneshot::error::RecvError;
 use tokio::task::yield_now;
 use tokio::time::Instant;
-use tonic::codegen::{CompressionEncoding, Service, StdError};
+use tonic::codec::CompressionEncoding;
+use tonic::codegen::{Service, StdError};
 use tonic::transport::{Channel, Endpoint, Error};
+use tonic::Status;
 use tracing::instrument::{WithDispatch, WithSubscriber};
 use tracing::subscriber::NoSubscriber;
 use tracing::{error, warn};
 use tracing_core::Dispatch;
+use tracing_lv_core::proto::app_run_replay::Variant;
 use tracing_lv_core::proto::tracing_service_client::TracingServiceClient;
-use tracing_lv_core::proto::{record_param, AppStop, PingParam, RecordParam};
-use tracing_lv_core::{MsgReceiverSubscriber, TLAppInfo, TLLayer, TracingLiveMsgSubscriber};
-use tracing_lv_core::{TLAppInfoExt, TLMsg};
+use tracing_lv_core::proto::{record_param, AppRunReplay, AppStop, PingParam, RecordParam};
+use tracing_lv_core::{MsgReceiverSubscriber, TLAppInfoExt};
+use tracing_lv_core::{TLAppInfo, TLLayer, TracingLiveMsgSubscriber};
 use tracing_subscriber::layer::{Layered, SubscriberExt};
 use tracing_subscriber::registry::LookupSpan;
 use uuid::Uuid;
-use crate::persistence::{PersistenceSubscriber, RecordsPersistenceToFile, RWS};
 
 struct NoSubscriberService<T>(T);
 struct NoSubscriberExecutor;
@@ -173,7 +176,7 @@ impl<T> AsyncWriteWithReadAndSeek for T where T: AsyncWriteWithSeek + AsyncRead 
 pub struct TLReconnectAndPersistenceSetting {
     pub records_writer: Arc<Mutex<dyn RWS + Send>>,
     pub reconnect_interval: Vec<Duration>,
-    pub compression_level: i32
+    pub compression_level: i32,
 }
 
 impl TLReconnectAndPersistenceSetting {
@@ -215,7 +218,7 @@ pub trait TLSubscriberExt: Sized {
         setting: TLSetting,
     ) -> Result<
         (
-            Layered<TLLayer<PersistenceSubscriber>, Self>,
+            Layered<TLLayer<EncodeBytesSubscriber>, Self>,
             impl Future<Output = ()> + Send + 'static,
             TLGuard,
         ),
@@ -233,7 +236,7 @@ pub trait TLSubscriberExt: Sized {
     ) -> Result<U, Error>
     where
         D: TonicTryConnect,
-        Layered<TLLayer<PersistenceSubscriber>, Self>: Into<Dispatch>,
+        Layered<TLLayer<EncodeBytesSubscriber>, Self>: Into<Dispatch>,
     {
         use tracing_subscriber::util::SubscriberInitExt;
         let (layered, future, mut _guard) = self.with_tracing_lv(dst, app_info, setting).await?;
@@ -268,7 +271,7 @@ where
         setting: TLSetting,
     ) -> Result<
         (
-            Layered<TLLayer<PersistenceSubscriber>, Self>,
+            Layered<TLLayer<EncodeBytesSubscriber>, Self>,
             impl Future<Output = ()> + Send + 'static,
             TLGuard,
         ),
@@ -279,168 +282,233 @@ where
     {
         let run_id = Uuid::new_v4();
 
-        // let channel = dst.try_connect().await?;
-        //
-        // let mut client = TracingServiceClient::new(NoSubscriberService(channel))
-        //     .send_compressed(CompressionEncoding::Zstd)
-        //     .max_decoding_message_size(usize::MAX)
-        //     .accept_compressed(CompressionEncoding::Zstd);
-        let (msg_sender, msg_receiver) = flume::unbounded();
-        // let _app_start = {
-        //     let instant = Instant::now();
-        //     let _ = client.ping(PingParam {}).await.unwrap();
-        //     let rtt = instant.elapsed();
-        //     let app_start = app_info.into_app_start(run_id, rtt);
-        //     msg_sender
-        //         .send(RecordParam {
-        //             send_time: app_start.record_time.clone(),
-        //             record_index: 0,
-        //             variant: Some(record_param::Variant::AppStart(app_start.clone())),
-        //         })
-        //         .unwrap();
-        //     app_start
-        // };
-        let write_sync_semaphore = Arc::new(tokio::sync::Semaphore::new(1024));
-       let (subscriber,subscriber_task_handler) = PersistenceSubscriber::new(
-          run_id,
-          TLReconnectAndPersistenceSetting::from_file(
-             std::fs::OpenOptions::new()
-                .write(true)
-                .read(true)
-                .create(true)
-                .open("./test.zip")
-                .unwrap(),
-          )
-             .unwrap(),
-       ).unwrap();
+        let channel = dst.try_connect().await?;
+
+        let mut client = TracingServiceClient::new(NoSubscriberService(channel))
+            .send_compressed(CompressionEncoding::Zstd)
+            .max_decoding_message_size(usize::MAX)
+            .accept_compressed(CompressionEncoding::Zstd);
+        let (mut msg_sender, mut msg_receiver) = flume::unbounded();
+
+        let (sender, receiver) = flume::unbounded::<(Bytes, u64)>();
+        enum RecordMsg {
+            NewRecord(u64),
+            ReConnect {
+                receiver: tokio::sync::oneshot::Receiver<u64>,
+            },
+        }
+        let (record_index_sender, record_index_receiver) = flume::unbounded::<RecordMsg>();
+
+        {
+            use bytes::Buf;
+            let setting = TLReconnectAndPersistenceSetting::from_file(
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .read(true)
+                    .create(true)
+                    .open("./test.zip")
+                    .unwrap(),
+            )
+            .unwrap();
+            let mut buf_recv = Vec::with_capacity(RECORD_BLOCK_SIZE);
+            let mut file = RecordsPersistenceToFile::new(setting.compression_level).unwrap();
+            let metadata = {
+                let mut records_io = setting.records_writer.lock().unwrap();
+                file.init(run_id.as_u128(), &mut *records_io).unwrap()
+            };
+            println!("records_metadata: {:#?}", metadata.cur_pos);
+            println!("init end");
+            {
+                let mut records_io = setting.records_writer.lock().unwrap();
+                file.debug(&mut *records_io, &metadata).unwrap();
+            }
+            println!("debug end");
+
+            let _task_handle: tokio::task::JoinHandle<BinResult<()>> = tokio::spawn({
+                let records_io = setting.records_writer.clone();
+                let record_index_sender = record_index_sender.clone();
+                async move {
+                    while let Ok(n) = receiver.recv_async().await {
+                        buf_recv.clear();
+                        buf_recv.push(n);
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        while let Ok(n) = receiver.try_recv() {
+                            buf_recv.push(n);
+                            if buf_recv.len() == RECORD_BLOCK_SIZE {
+                                break;
+                            }
+                        }
+                        let mut records_io = records_io.lock().unwrap();
+                        file.write_frames(
+                            &mut *records_io,
+                            buf_recv.iter().map(|n| (n.0.chunk(), n.1)),
+                        )?;
+                        if record_index_sender
+                            .send(RecordMsg::NewRecord(buf_recv[0].1))
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Ok(())
+                }
+            });
+
+            tokio::spawn({
+                let msg_sender = msg_sender.clone();
+                async move {
+                    let mut receved_msg = record_index_receiver.recv_async().await;
+                    let mut cur_record_index = 0;
+                    let mut file =
+                        RecordsPersistenceToFile::new(setting.compression_level).unwrap();
+                    let _metadata = {
+                        let mut records_io = setting.records_writer.lock().unwrap();
+                        file.init_exist(run_id.as_u128(), &mut *records_io).unwrap()
+                    };
+                    while let Ok(mut msg) = receved_msg {
+                        match msg {
+                            RecordMsg::NewRecord(_record_index) => {
+                                cur_record_index = _record_index;
+                                let mut records_io = setting.records_writer.lock().unwrap();
+                                if msg_sender.is_disconnected() {
+                                    break;
+                                }
+                                file.iter_from(
+                                    &mut *records_io,
+                                    &_metadata.current_instance_header,
+                                    cur_record_index,
+                                    |msg| {
+                                        println!("msg: {msg:?}");
+                                        cur_record_index = msg.record_index();
+                                        let _ = msg_sender.send(msg.into());
+                                    },
+                                )
+                                .unwrap();
+                            }
+                            RecordMsg::ReConnect { receiver } => match receiver.await {
+                                Ok(record_index) => {
+                                    cur_record_index = record_index;
+                                }
+                                Err(_err) => {
+                                    break;
+                                }
+                            },
+                        }
+                        receved_msg = record_index_receiver.recv_async().await;
+                    }
+                }
+            });
+        }
+
+        let mut app_start = {
+            let instant = Instant::now();
+            let _ = client.ping(PingParam {}).await.unwrap();
+            let rtt = instant.elapsed();
+            let app_start = app_info.into_app_start(run_id, rtt);
+            msg_sender
+                .send(RecordParam {
+                    send_time: app_start.record_time.clone(),
+                    record_index: 0,
+                    variant: Some(record_param::Variant::AppStart(app_start.clone())),
+                })
+                .unwrap();
+            app_start
+        };
         Ok((
             self.with(TLLayer {
-                /*                subscriber: (
-                    MsgReceiverSubscriber::new(msg_sender.clone()),
-                    setting.reconnect_and_persistence.map(|setting| {
-                        use bytes::Buf;
-                        let (sender, receiver) = flume::unbounded::<(Bytes, u64)>();
-                        let write_sync_semaphore = write_sync_semaphore.clone();
-                        // tokio::spawn(async move {
-                        //     let mut len = 0;
-                        //     let mut app_run_data_file = setting.metadata_info_writer;
-                        //     let app_run_start_pos = setting.metadata_info_cur_len;
-                        //     let mut encoder = async_compression::tokio::write::ZstdEncoder::new(
-                        //         setting.records_writer,
-                        //     );
-                        //     let mut buf = BytesMut::new();
-                        //     let mut app_run_data = AppRunData {
-                        //         app_run_id: run_id,
-                        //         start_pos: app_run_start_pos,
-                        //         end_pos: app_run_start_pos,
-                        //         last_record_index: 0,
-                        //     };
-                        //     while let Ok((bytes, record_index)) = receiver.recv_async().await {
-                        //         app_run_data.last_record_index = record_index;
-                        //         app_run_data.end_pos = len;
-                        //         encoder
-                        //             .get_mut()
-                        //             .write_u64(app_run_data.last_record_index)
-                        //             .await
-                        //             .unwrap();
-                        //         encoder
-                        //             .get_mut()
-                        //             .write_u64(bytes.chunk().len() as u64)
-                        //             .await
-                        //             .unwrap();
-                        //         encoder.write_all(bytes.chunk()).await.unwrap();
-                        //         // <num:8><json len:8><record json>
-                        //         len += 8 + 8 + bytes.chunk().len() as u64;
-                        //         serde_json::to_writer_pretty((&mut buf).writer(), &app_run_data)
-                        //             .unwrap();
-                        //         app_run_data_file
-                        //             .seek(SeekFrom::Start(app_run_data.start_pos))
-                        //             .await
-                        //             .unwrap();
-                        //         app_run_data_file.write_all(buf.chunk()).await.unwrap();
-                        //         app_run_data_file.flush().await.unwrap();
-                        //         write_sync_semaphore.add_permits(1);
-                        //         buf.clear();
-                        //     }
-                        // });
-                        thread_local! {
-                            static BUF: RefCell<BytesMut> = RefCell::new(BytesMut::new());
-                        }
-                        Box::new(move |msg: &TLMsg| {
-                            BUF.with_borrow_mut(|buf| {
-                                serde_json::to_writer_pretty(buf.writer(), msg).unwrap();
-                                let _ = sender.send((buf.split().freeze(), msg.record_index()));
-                            })
-                        }) as _
-                    }),
-                ),*/
-                subscriber,
+                subscriber: EncodeBytesSubscriber { sender },
                 enable_enter: false,
                 record_index: 1.into(),
             }),
             {
+                let msg_sender = msg_sender.clone();
                 async move {
-                   subscriber_task_handler.await.unwrap().unwrap();
-                    // let app_run =
-                    //     |mut client: TracingServiceClient<NoSubscriberService<Channel>>| {
-                    //         let msg_receiver = msg_receiver.clone();
-                    //         async move {
-                    //             let stream = futures_util::stream::unfold(
-                    //                 (msg_receiver, None, false),
-                    //                 move |(msg_receiver, mut app_stop, is_end)| async move {
-                    //                     if is_end {
-                    //                         return None;
-                    //                     }
-                    //                     let (mut param, app_stop, is_end) = if app_stop.is_some() {
-                    //                         yield_now().await;
-                    //                         let param = msg_receiver
-                    //                             .try_recv()
-                    //                             .ok()
-                    //                             .or_else(|| app_stop.take())
-                    //                             .unwrap();
-                    //                         let is_end = app_stop.is_none();
-                    //                         (param, app_stop, is_end)
-                    //                     } else {
-                    //                         let param = msg_receiver.recv_async().await.ok()?;
-                    //                         if matches!(
-                    //                             param.variant.as_ref().unwrap(),
-                    //                             record_param::Variant::AppStop(_)
-                    //                         ) {
-                    //                             let mut app_stop = Some(param);
-                    //                             yield_now().await;
-                    //                             let param = msg_receiver
-                    //                                 .try_recv()
-                    //                                 .ok()
-                    //                                 .or_else(|| app_stop.take())
-                    //                                 .unwrap();
-                    //                             let is_end = app_stop.is_none();
-                    //                             (param, app_stop, is_end)
-                    //                         } else {
-                    //                             (param, None, false)
-                    //                         }
-                    //                     };
-                    //                     param.send_time = Utc::now().timestamp_nanos_opt().unwrap();
-                    //                     Some((param, (msg_receiver, app_stop, is_end)))
-                    //                 },
-                    //             );
-                    //             (client.app_run(stream).await, client)
-                    //         }
-                    //     };
-                    // loop {
-                    //     let (r, _client) = { app_run(client).await };
-                    //     client = _client;
-                    //     match r {
-                    //         Ok(record_param) => {
-                    //             warn!("not expected app run end. {record_param:?}");
-                    //         }
-                    //         Err(err) => {
-                    //             error!("app run error end. {err:?}");
-                    //             eprintln!("app run error end. {err:?}");
-                    //             tokio::time::sleep(Duration::from_secs(10)).await;
-                    //             eprintln!("reconnect");
-                    //         }
-                    //     }
-                    // }
+                    let mut reconnect_sender: Option<tokio::sync::oneshot::Sender<u64>> = None;
+                    loop {
+                        let r = client
+                            .app_run(futures_util::stream::unfold(
+                                (msg_receiver.clone(), None, false),
+                                move |(msg_receiver, mut app_stop, is_end)| async move {
+                                    if is_end {
+                                        return None;
+                                    }
+                                    let (mut param, app_stop, is_end) = if app_stop.is_some() {
+                                        yield_now().await;
+                                        let param = msg_receiver
+                                            .try_recv()
+                                            .ok()
+                                            .or_else(|| app_stop.take())
+                                            .unwrap();
+                                        let is_end = app_stop.is_none();
+                                        (param, app_stop, is_end)
+                                    } else {
+                                        let param = msg_receiver.recv_async().await.ok()?;
+                                        if matches!(
+                                            param.variant.as_ref().unwrap(),
+                                            record_param::Variant::AppStop(_)
+                                        ) {
+                                            let mut app_stop = Some(param);
+                                            yield_now().await;
+                                            let param = msg_receiver
+                                                .try_recv()
+                                                .ok()
+                                                .or_else(|| app_stop.take())
+                                                .unwrap();
+                                            let is_end = app_stop.is_none();
+                                            (param, app_stop, is_end)
+                                        } else {
+                                            (param, None, false)
+                                        }
+                                    };
+                                    param.send_time = Utc::now().timestamp_nanos_opt().unwrap();
+                                    Some((param, (msg_receiver, app_stop, is_end)))
+                                },
+                            ))
+                            .await;
+                        match r {
+                            Ok(mut record_param) => {
+                                while let Some(reply) = record_param.get_mut().next().await {
+                                    match reply {
+                                        Ok(reply) => match reply.variant.unwrap() {
+                                            Variant::ReconnectReply(reply) => {
+                                                let sender = reconnect_sender.take().unwrap();
+                                                if sender.send(reply.last_record_index).is_err() {
+                                                    break;
+                                                }
+                                            }
+                                        },
+                                        Err(err) => {
+                                            eprintln!("error: {err:?}");
+                                        }
+                                    }
+                                }
+                                return;
+                            }
+                            Err(err) => {
+                                error!("app run error end. {err:?}");
+                                eprintln!("app run error end. {err:?}");
+                            }
+                        }
+                        tokio::time::sleep(Duration::from_secs(10)).await;
+                        eprintln!("reconnect");
+                        app_start.reconnect = true;
+                        let (sender, receiver) = tokio::sync::oneshot::channel();
+                        if record_index_sender
+                            .send(RecordMsg::ReConnect { receiver })
+                            .is_err()
+                        {
+                            break;
+                        }
+                        reconnect_sender = Some(sender);
+                        while msg_receiver.try_recv().is_ok() {}
+                        msg_sender
+                            .send(RecordParam {
+                                send_time: Utc::now().timestamp_nanos_opt().unwrap(),
+                                record_index: 0,
+                                variant: Some(record_param::Variant::AppStart(app_start.clone())),
+                            })
+                            .unwrap();
+                    }
                 }
             },
             TLGuard {
@@ -450,7 +518,6 @@ where
         ))
     }
 }
-
 
 #[cfg(test)]
 mod tests {

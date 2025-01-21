@@ -5,6 +5,7 @@ use crate::grpc_service::{
     FIELD_DATA_REPEATED_COUNT, FIELD_DATA_SPAN_T_ID, FIELD_DATA_STABLE_SPAN_ID,
 };
 use crate::record::{AppRunInfo, SpanCacheId, SpanId, TracingKind, TracingRecordVariant};
+use crate::{i64_to_u64, u64_to_i64};
 use chrono::{DateTime, FixedOffset, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeDelta, Utc};
 use entity::app_build::{ActiveModel, Column};
 use entity::tracing_record::Model;
@@ -46,12 +47,11 @@ use tracing_lv_core::proto::{FieldValue, Level};
 use tracing_subscriber::filter::FilterExt;
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
-use crate::{i64_to_u64, u64_to_i64};
 
 pub type BigInt = i64;
 
 const INSERT_STR: &'static str = r#"
-insert into tracing_record(app_run_record_index,app_id, app_version, app_run_id, node_id, name, record_time, kind, level, span_id, parent_span_t_id, parent_id, fields, target, module_path, position_info)
+insert into tracing_record(id,app_run_record_index,app_id, app_version, app_run_id, node_id, name, record_time, kind, level, span_id, parent_span_t_id, parent_id, fields, target, module_path, position_info)
 values
 "#;
 
@@ -104,6 +104,7 @@ impl TracingRecordBatchInserter {
     #[inline(always)]
     pub fn append_insert_record(
         &mut self,
+        id: u64,
         record_index: u64,
         name: &str,
         record_time: &DateTime<FixedOffset>,
@@ -126,7 +127,8 @@ impl TracingRecordBatchInserter {
         // }
         {
             // write!(&mut self.sql, "'{}',", self.id)?;
-            write!(&mut self.sql, "'{}',", i64::from_le_bytes(record_index.to_le_bytes()))?;
+            write!(&mut self.sql, "'{}',", id as i64)?;
+            write!(&mut self.sql, "'{}',", record_index as i64)?;
             write!(&mut self.sql, "'{}',", app_info.id)?;
             self.add_arg(app_info.version.as_str())?;
             write!(&mut self.sql, "'{}',", app_info.run_id)?;
@@ -255,6 +257,7 @@ pub struct AppLatestInfoDto {
 pub struct TracingRecordDto {
     // TODO:
     pub id: u64,
+    pub record_index: u64,
     pub app_id: Uuid,
     #[schema(value_type = String)]
     pub app_version: SmolStr,
@@ -467,7 +470,7 @@ impl From<&TracingTreeRecordVariantDto> for Option<TracingTreeEndDto> {
 
 #[derive(Default, Clone, Debug, Deserialize, IntoParams, ToSchema)]
 pub struct CursorInfo {
-    pub record_time: DateTime<FixedOffset>,
+    pub id: u64,
     pub is_before: bool,
 }
 #[derive(Clone, Debug, Deserialize, ToSchema)]
@@ -787,7 +790,9 @@ impl TracingService {
                     records
                         .iter()
                         .filter(|n| n.kind == TracingKind::SpanCreate
-                            && n.fields.contains_key(FIELD_DATA_IS_CONTAINS_RELATED))
+                            && n.fields.contains_key(FIELD_DATA_IS_CONTAINS_RELATED
+                        )
+                    )
                         .filter_map(|n| {
                             let r = n.span_t_id.as_ref().map(|n| n.parse().ok()).flatten();
                             r
@@ -885,10 +890,10 @@ impl TracingService {
                 .collect(),
         })
     }
-    pub async fn query_last_record_id(&self,app_run_id: Uuid) -> Result<Option<u64>, DbErr> {
+    pub async fn query_last_record_id(&self, app_run_id: Uuid) -> Result<Option<u64>, DbErr> {
         use tracing_record::*;
         let option = Entity::find()
-           .filter(Column::AppRunId.eq(app_run_id))
+            .filter(Column::AppRunId.eq(app_run_id))
             .order_by_desc(Column::AppRunRecordIndex)
             .one(&self.dc)
             .await?;
@@ -924,17 +929,19 @@ impl TracingService {
             })
             .apply_if(filter.parent_span_t_ids, |n, span_t_id| {
                 match span_t_id.len() {
-                    1 => n.filter(
-                        if span_t_id[0] == 0 {
-                            if filter.app_run_ids.is_none() || filter.app_run_ids.as_ref().is_some_and(|n|n.is_empty()) {
-                                Column::ParentSpanTId.is_null()
-                            }else{
-                                Column::ParentSpanTId.is_null().and(Column::Kind.ne(TracingKind::AppStart.as_str()))
-                            }
-                        }else{
-                            Column::ParentSpanTId.eq(i64::from_le_bytes(span_t_id[0].to_le_bytes()))
+                    1 => n.filter(if span_t_id[0] == 0 {
+                        if filter.app_run_ids.is_none()
+                            || filter.app_run_ids.as_ref().is_some_and(|n| n.is_empty())
+                        {
+                            Column::ParentSpanTId.is_null()
+                        } else {
+                            Column::ParentSpanTId
+                                .is_null()
+                                .and(Column::Kind.ne(TracingKind::AppStart.as_str()))
                         }
-                    ),
+                    } else {
+                        Column::ParentSpanTId.eq(i64::from_le_bytes(span_t_id[0].to_le_bytes()))
+                    }),
                     0 => n,
                     _ => n.filter(
                         Column::ParentSpanTId.is_in(
@@ -1052,21 +1059,21 @@ impl TracingService {
                 ),
             )
         }
-        let count = filter.count.unwrap_or(32);
         let records = if let Some(cursor) = filter.cursor {
+            let count = filter.count.unwrap_or(500);
             if cursor.is_before {
                 select
                     .order_by_desc(Column::RecordTime)
-                    .cursor_by(Column::RecordTime)
-                    .before(cursor.record_time)
+                    .cursor_by(Column::Id)
+                    .before(cursor.id)
                     .last(count)
                     .all(&self.dc)
                     .await?
             } else {
                 select
                     .order_by_asc(Column::RecordTime)
-                    .cursor_by(Column::RecordTime)
-                    .after(cursor.record_time)
+                    .cursor_by(Column::Id)
+                    .after(cursor.id)
                     .first(count)
                     .all(&self.dc)
                     .await?
@@ -1074,7 +1081,9 @@ impl TracingService {
         } else {
             let mut records = select
                 .order_by_desc(Column::RecordTime)
-                .limit(count)
+               .apply_if(filter.count,|n,count| {
+                   n.limit(count)
+               })
                 .all(&self.dc)
                 .await?;
 
@@ -1526,7 +1535,7 @@ impl TracingService {
             .map(|n| n.last_insert_id)
         }
     }
-/*
+    /*
     pub async fn incremental_repeated_event(
         &self,
         id: BigInt,
@@ -1729,7 +1738,8 @@ impl From<tracing_record::Model> for TracingRecordDto {
             (false, None, None, Default::default())
         };
         TracingRecordDto {
-            id: i64_to_u64(n.app_run_record_index),
+            id: n.id as u64,
+            record_index: n.app_run_record_index as u64,
             app_id: n.app_id,
             app_version: n.app_version.into(),
             app_run_id: n.app_run_id,

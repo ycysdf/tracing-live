@@ -21,24 +21,24 @@ import { mapValues } from '../runtime';
 export interface CursorInfo {
     /**
      * 
+     * @type {number}
+     * @memberof CursorInfo
+     */
+    id: number;
+    /**
+     * 
      * @type {boolean}
      * @memberof CursorInfo
      */
     isBefore: boolean;
-    /**
-     * 
-     * @type {Date}
-     * @memberof CursorInfo
-     */
-    recordTime: Date;
 }
 
 /**
  * Check if a given object implements the CursorInfo interface.
  */
 export function instanceOfCursorInfo(value: object): value is CursorInfo {
+    if (!('id' in value) || value['id'] === undefined) return false;
     if (!('isBefore' in value) || value['isBefore'] === undefined) return false;
-    if (!('recordTime' in value) || value['recordTime'] === undefined) return false;
     return true;
 }
 
@@ -52,8 +52,8 @@ export function CursorInfoFromJSONTyped(json: any, ignoreDiscriminator: boolean)
     }
     return {
         
+        'id': json['id'],
         'isBefore': json['is_before'],
-        'recordTime': (new Date(json['record_time'])),
     };
 }
 
@@ -68,8 +68,8 @@ export function CursorInfoFromJSONTyped(json: any, ignoreDiscriminator: boolean)
 
     return {
         
+        'id': value['id'],
         'is_before': value['isBefore'],
-        'record_time': ((value['recordTime']).toISOString()),
     };
 }
 

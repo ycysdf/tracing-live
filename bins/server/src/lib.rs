@@ -4,7 +4,7 @@
 
 use crate::tracing_service::BigInt;
 use shadow_rs::shadow;
-use std::sync::atomic::AtomicI64;
+use std::sync::atomic::{AtomicI64, AtomicU64};
 use std::{sync, u64};
 
 mod dyn_query;
@@ -29,15 +29,15 @@ pub fn i64_to_u64(value: i64) -> u64 {
     u64::from_le_bytes(value.to_le_bytes())
 }
 
-pub struct RecordIdGenerator(AtomicI64);
+pub struct RecordIdGenerator(AtomicU64);
 
 impl RecordIdGenerator {
-    pub fn reset(&self, value: i64) {
+    pub fn reset(&self, value: u64) {
         self.0.swap(value, sync::atomic::Ordering::SeqCst);
     }
-    pub fn next(&self) -> i64 {
+    pub fn next(&self) -> u64 {
         self.0.fetch_add(1, sync::atomic::Ordering::SeqCst)
     }
 }
 
-pub static RECORD_ID_GENERATOR: RecordIdGenerator = RecordIdGenerator(AtomicI64::new(1));
+pub static RECORD_ID_GENERATOR: RecordIdGenerator = RecordIdGenerator(AtomicU64::new(1));

@@ -14,7 +14,7 @@ use tracing_lv_core::{
     proto::{record_param, RecordParam},
     MsgReceiverSubscriber, TLAppInfo, TLAppInfoExt, TLLayer,
 };
-use tracing_lv_server::running_app::{AppRunMsg, TLConfig};
+use tracing_lv_server::running_app::{AppRunMsg, AppRunRecord, TLConfig};
 use tracing_lv_server::tracing_service::TracingRecordBatchInserter;
 use tracing_lv_server::{
     build,
@@ -22,7 +22,7 @@ use tracing_lv_server::{
     running_app::RunMsg,
     running_app::RunningApps,
     tracing_service::TracingService,
-    web_service,
+    web_service, RECORD_ID_GENERATOR,
 };
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -91,6 +91,7 @@ async fn main() -> anyhow::Result<()> {
                 )
                 .await?;
                 msg_sender.send(RunMsg::AppRun {
+                    record_sender: self_lifetime.record_sender.clone(),
                     run_info: self_lifetime.app_run_info.clone(),
                     record_receiver: app_run_msg_receiver,
                 })?;
@@ -98,14 +99,18 @@ async fn main() -> anyhow::Result<()> {
                     let variant = msg.variant.unwrap();
                     let record = if let record_param::Variant::AppStop(_) = variant {
                         unreachable!("AppStop should not be sent to self_record_receiver");
-                        // break;
                     } else {
                         self_lifetime.record(variant).await?
                     };
-                    if let Err(err) = self_lifetime.record_sender.send(AppRunMsg::Record {
-                        record_index: msg.record_index,
-                        variant: record,
-                    }) {
+                    if let Err(err) =
+                        self_lifetime
+                            .record_sender
+                            .send(AppRunMsg::Record(AppRunRecord {
+                                id: RECORD_ID_GENERATOR.next(),
+                                record_index: msg.record_index,
+                                variant: record,
+                            }))
+                    {
                         info!(?err, "record_sender send failed. exit!");
                         break;
                     }

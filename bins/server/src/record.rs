@@ -123,70 +123,40 @@ pub enum TracingRecordVariant {
 }
 
 impl TracingRecordVariant {
-    #[inline(always)]
-    pub fn get_dto(&self, record_id: u64) -> TracingRecordDto {
-        TracingRecordDto {
-            id: record_id,
-            app_id: self.app_info().id,
-            app_version: self.app_info().version.clone(),
-            app_run_id: self.app_info().run_id,
-            node_id: self.app_info().node_id.clone(),
-            name: self.name().clone(),
-            kind: self.kind(),
-            level: self.level(),
-            span_id: self.span_id(),
-            fields: Arc::new(
-                self.fields()
-                    .cloned()
-                    .map(|n| n.into_json_map())
-                    .unwrap_or_default(),
-            ),
-            span_id_is_stable: self
-                .span_full_info()
-                .map(|n| n.fields.stable_span_id().is_some()),
-            record_time: self.record_time().fixed_offset(),
-            target: self.target().cloned(),
-            module_path: self.module_path().cloned(),
-            position_info: self.file_line().cloned(),
-            creation_time: Utc::now().fixed_offset(),
-            parent_id: self.parent_id(),
-            span_t_id: self.span_t_id().map(|n| n.to_smolstr()),
-            parent_span_t_id: self.parent_span_t_id().map(|n| n.to_smolstr()),
-            repeated_count: None,
-        }
-    }
+    // #[inline(always)]
+    // pub fn get_dto(&self, record_id: u64) -> TracingRecordDto {
+    //     TracingRecordDto {
+    //         id: record_id,
+    //         record_index: 0,
+    //         app_id: self.app_info().id,
+    //         app_version: self.app_info().version.clone(),
+    //         app_run_id: self.app_info().run_id,
+    //         node_id: self.app_info().node_id.clone(),
+    //         name: self.name().clone(),
+    //         kind: self.kind(),
+    //         level: self.level(),
+    //         span_id: self.span_id(),
+    //         fields: Arc::new(
+    //             self.fields()
+    //                 .cloned()
+    //                 .map(|n| n.into_json_map())
+    //                 .unwrap_or_default(),
+    //         ),
+    //         span_id_is_stable: self
+    //             .span_full_info()
+    //             .map(|n| n.fields.stable_span_id().is_some()),
+    //         record_time: self.record_time().fixed_offset(),
+    //         target: self.target().cloned(),
+    //         module_path: self.module_path().cloned(),
+    //         position_info: self.file_line().cloned(),
+    //         creation_time: Utc::now().fixed_offset(),
+    //         parent_id: self.parent_id(),
+    //         span_t_id: self.span_t_id().map(|n| n.to_smolstr()),
+    //         parent_span_t_id: self.parent_span_t_id().map(|n| n.to_smolstr()),
+    //         repeated_count: None,
+    //     }
+    // }
 
-    #[inline(always)]
-    pub fn into_dto(mut self, record_id: u64) -> TracingRecordDto {
-        TracingRecordDto {
-            id: record_id,
-            app_id: self.app_info().id,
-            app_version: self.app_info().version.clone(),
-            app_run_id: self.app_info().run_id,
-            node_id: self.app_info().node_id.clone(),
-            name: self.name().clone(),
-            kind: self.kind(),
-            level: self.level(),
-            span_id: self.span_id(),
-            fields: Arc::new(
-                self.fields_mut()
-                    .map(|n| core::mem::take(n).into_json_map())
-                    .unwrap_or_default(),
-            ),
-            span_id_is_stable: self
-                .span_full_info()
-                .map(|n| n.fields.stable_span_id().is_some()),
-            record_time: self.record_time().fixed_offset(),
-            target: self.target().cloned(),
-            module_path: self.module_path().cloned(),
-            position_info: self.file_line().cloned(),
-            creation_time: Utc::now().fixed_offset(),
-            parent_id: self.parent_id(),
-            span_t_id: self.span_t_id().map(|n| n.to_smolstr()),
-            parent_span_t_id: self.parent_span_t_id().map(|n| n.to_smolstr()),
-            repeated_count: None,
-        }
-    }
 
     #[inline]
     pub fn filter(&self, filter: &TracingRecordFilter) -> bool {

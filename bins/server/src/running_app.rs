@@ -25,12 +25,13 @@ use sea_orm::{
 use smallvec::SmallVec;
 use smol_str::{SmolStr, ToSmolStr};
 use std::collections::{HashMap, VecDeque};
-use std::env;
 use std::fmt::Write;
 use std::future::Future;
 use std::panic::Location;
 use std::sync::Arc;
 use std::time::Duration;
+use std::{env, mem};
+use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio::{join, try_join};
 use tonic::Status;
@@ -38,13 +39,14 @@ use tracing::{error, info, warn};
 use tracing_lv_core::proto::FieldValue;
 use uuid::Uuid;
 
+#[derive(Debug,Clone)]
 struct EnteredSpan {
     id: Uuid,
     record_time: DateTime<Utc>,
-    record_index: u64,
+    record_id: u64,
 }
 
-#[derive(Deref)]
+#[derive(Clone,Deref)]
 struct CreatedSpan {
     id: Uuid,
     #[deref]
@@ -52,6 +54,7 @@ struct CreatedSpan {
     parent_span_t_id: Option<u64>,
     total_enter_duration: chrono::Duration,
     enter_span: Option<EnteredSpan>,
+    record_id: u64,
     record_index: u64,
     // 存储字段，合并通知字段更新
     last_record_filed_id: Option<(u64, TracingFields)>,
@@ -64,16 +67,57 @@ struct RecordWatcher {
     filter: TracingRecordFilter,
 }
 
+#[derive(Clone, Debug)]
+pub struct AppRunRecord {
+    pub id: u64,
+    pub record_index: u64,
+    pub variant: TracingRecordVariant,
+}
+
+impl Into<TracingRecordDto> for AppRunRecord {
+    fn into(mut self) -> TracingRecordDto {
+        TracingRecordDto {
+            id: self.id,
+            record_index: self.record_index,
+            app_id: self.variant.app_info().id,
+            app_version: self.variant.app_info().version.clone(),
+            app_run_id: self.variant.app_info().run_id,
+            node_id: self.variant.app_info().node_id.clone(),
+            name: self.variant.name().clone(),
+            kind: self.variant.kind(),
+            level: self.variant.level(),
+            span_id: self.variant.span_id(),
+            fields: Arc::new(
+                self.variant
+                    .fields_mut()
+                    .map(|n| core::mem::take(n).into_json_map())
+                    .unwrap_or_default(),
+            ),
+            span_id_is_stable: self
+                .variant
+                .span_full_info()
+                .map(|n| n.fields.stable_span_id().is_some()),
+            record_time: self.variant.record_time().fixed_offset(),
+            target: self.variant.target().cloned(),
+            module_path: self.variant.module_path().cloned(),
+            position_info: self.variant.file_line().cloned(),
+            creation_time: Utc::now().fixed_offset(),
+            parent_id: self.variant.parent_id(),
+            span_t_id: self.variant.span_t_id().map(|n| n.to_smolstr()),
+            parent_span_t_id: self.variant.parent_span_t_id().map(|n| n.to_smolstr()),
+            repeated_count: None,
+        }
+    }
+}
+
 pub enum AppRunMsg {
-    Record {
-        record_index: u64,
-        variant: TracingRecordVariant,
-    },
+    Record(AppRunRecord),
     AddRecordWatcher(RecordWatcher),
 }
 
 pub enum RunMsg {
     AppRun {
+        record_sender: flume::Sender<AppRunMsg>,
         run_info: Arc<AppRunInfo>,
         record_receiver: flume::Receiver<AppRunMsg>,
     },
@@ -138,9 +182,21 @@ pub struct TLConfig {
     pub record_max_buf_count: usize,
 }
 
+pub struct RunningAppInfo {
+    run_info: Arc<AppRunInfo>,
+    record_sender: flume::Sender<AppRunMsg>,
+    task: JoinHandle<()>,
+}
+
+impl Drop for RunningAppInfo {
+    fn drop(&mut self) {
+        self.task.abort()
+    }
+}
+
 pub struct RunningApps {
     tracing_service: TracingService,
-    running_apps: HashMap<Uuid, RunningApp>,
+    running_apps: HashMap<Uuid, RunningAppInfo>,
     config: Arc<TLConfig>,
 }
 
@@ -159,8 +215,13 @@ impl RunningApps {
                 RunMsg::AppRun {
                     run_info,
                     record_receiver,
+                    record_sender,
                 } => {
-                    let id = match self.tracing_service.query_last_record_id(run_info.run_id).await {
+                    let id = match self
+                        .tracing_service
+                        .query_last_record_id(run_info.run_id)
+                        .await
+                    {
                         Ok(id) => id.unwrap_or(0),
                         Err(err) => {
                             error!("query_last_record_id error. {err}");
@@ -173,15 +234,37 @@ impl RunningApps {
                         id,
                         self.config.clone(),
                     );
-                    tokio::spawn(async move {
+                    let task = tokio::spawn(async move {
                         running_app.handle_records(record_receiver).await.unwrap();
                     });
-                    // if let Some(app) = self.running_apps.insert(run_info.run_id, running_app) {
-                    //     warn!("app {} already running!", app.app_info.id);
-                    //     continue;
-                    // }
+                    if let Some(app) = self.running_apps.insert(
+                        run_info.run_id,
+                        RunningAppInfo {
+                            run_info: run_info.clone(),
+                            record_sender,
+                            task,
+                        },
+                    ) {
+                        warn!("app {} already running!", run_info.id);
+                        continue;
+                    }
                 }
-                RunMsg::AddRecordWatcher { .. } => {}
+                RunMsg::AddRecordWatcher { sender, filter } => {
+                    for (_, app) in self.running_apps.iter_mut() {
+                        if let Some(app_run_ids) = filter.app_run_ids.as_ref() {
+                            if !app_run_ids.is_empty()
+                                && !app_run_ids.contains(&app.run_info.run_id)
+                            {
+                                break;
+                            }
+                        }
+                        let _r = app.record_sender
+                           .send(AppRunMsg::AddRecordWatcher(RecordWatcher {
+                               sender: sender.clone(),
+                               filter: filter.clone(),
+                           }));
+                    }
+                }
             }
         }
     }
@@ -197,11 +280,7 @@ pub struct RunningApp {
     // running_apps: hashbrown::HashMap<Uuid, RunningApp>,
 
     // buf_records: VecDeque<(TracingRecordVariant, u64)>,
-    dto_buf: Vec<(
-        TracingRecordVariant,
-        u64,
-        Option<TracingTreeRecordVariantDto>,
-    )>,
+    dto_buf: Vec<(AppRunRecord, Option<TracingTreeRecordVariantDto>)>,
     record_batch_inserter: TracingRecordBatchInserter,
     pub config: Arc<TLConfig>,
 }
@@ -305,15 +384,12 @@ impl RunningApp {
     fn pre_handle_msg(
         msg: AppRunMsg,
         max_buf_count: usize,
-        buf: &mut VecDeque<(u64, TracingRecordVariant)>,
+        buf: &mut VecDeque<AppRunRecord>,
         record_watch_buf: &mut Vec<RecordWatcher>,
     ) -> PreHandleResult {
         match msg {
-            AppRunMsg::Record {
-                record_index,
-                variant: record,
-            } => {
-                buf.push_back((record_index, record));
+            AppRunMsg::Record(record) => {
+                buf.push_back(record);
                 if buf.len() >= max_buf_count + 1 {
                     PreHandleResult::BufFilled
                 } else {
@@ -335,9 +411,9 @@ impl RunningApp {
 
         let mut cur_record_field_count = 0;
         let config = self.config.clone();
-        let mut buf_records_1: VecDeque<(u64, TracingRecordVariant)> =
+        let mut buf_records_1: VecDeque<AppRunRecord> =
             VecDeque::with_capacity(config.record_max_buf_count);
-        let mut buf_records_2: VecDeque<(u64, TracingRecordVariant)> =
+        let mut buf_records_2: VecDeque<AppRunRecord> =
             VecDeque::with_capacity(config.record_max_buf_count);
         let mut buf_event_senders = Vec::new();
         let mut batch_inserter = SqlBatchExecutor::default();
@@ -382,7 +458,7 @@ impl RunningApp {
                 let future_2 = async {
                     let batch_inserter = &mut batch_inserter;
                     let mut records_iter = buf_records_2.iter_mut();
-                    while let Some((record_index, record)) = records_iter.next() {
+                    while let Some(record) = records_iter.next() {
                         /*                  if let TracingRecordVariant::Event {
                            span_info,
                            message,
@@ -465,24 +541,26 @@ impl RunningApp {
                            }
                         }*/
 
-                        let record_time = record.record_time();
+                        let record_time = record.variant.record_time();
                         let record_time = record_time.fixed_offset();
-                        let kind = record.kind();
-                        let level = record.level();
-                        let span_id = record.span_id();
-                        let parent_id = record.parent_id();
-                        let parent_span_t_id = record.parent_span_t_id();
+                        let kind = record.variant.kind();
+                        let level = record.variant.level();
+                        let span_id = record.variant.span_id();
+                        let parent_id = record.variant.parent_id();
+                        let parent_span_t_id = record.variant.parent_span_t_id();
 
                         // debug_assert_eq!(*record_index, self.record_batch_inserter.id);
                         record
-                            .scoped_json_fields(|record, json_fields| {
-                                let target = record.target();
-                                let module_path = record.module_path();
-                                let file_line = record.file_line();
-                                let app_info = record.app_info();
+                            .variant
+                            .scoped_json_fields(|n, json_fields| {
+                                let target = n.target();
+                                let module_path = n.module_path();
+                                let file_line = n.file_line();
+                                let app_info = n.app_info();
                                 self.record_batch_inserter.append_insert_record(
-                                    *record_index,
-                                    record.name(),
+                                    record.id,
+                                    record.record_index,
+                                    n.name(),
                                     &record_time,
                                     kind.as_str(),
                                     level.map(|n| n.into()),
@@ -505,10 +583,11 @@ impl RunningApp {
                     instant = Instant::now();
 
                     self.dto_buf.reserve_exact(buf_records_2.len());
-                    while let Some((record_index, mut record)) = buf_records_2.pop_front() {
-                        let app_info = record.app_info().clone();
-                        let r = match &mut record {
+                    while let Some(mut record) = buf_records_2.pop_front() {
+                        let app_info = record.variant.app_info().clone();
+                        let r = match &mut record.variant {
                             TracingRecordVariant::SpanCreate { info, .. } => {
+                                println!("SpanCrate: {}. record_index: {}",info.span_info.t_id,record.record_index);
                                 if let Some(_previous) = self.created_spans.insert(
                                     info.span_info.t_id,
                                     CreatedSpan {
@@ -516,7 +595,8 @@ impl RunningApp {
                                         parent_span_t_id: info.running_span.parent_span_t_id,
                                         total_enter_duration: Default::default(),
                                         enter_span: None,
-                                        record_index,
+                                        record_id: record.record_index,
+                                        record_index: record.record_index,
                                         last_record_filed_id: None,
                                         last_repeated_event: None,
                                         span_base_info: info.base.clone(),
@@ -567,11 +647,7 @@ impl RunningApp {
                                 writeln!(
                                     batch_inserter,
                                     r#"insert into tracing_span_run(id,app_run_id,span_id,run_time,record_id,fields) values ('{}','{}','{}','{}','{}','{{}}'::jsonb);"#,
-                                    created_span_id,
-                                    app_info.run_id,
-                                    span_id,
-                                    run_time,
-                                    u64_to_i64(record_index)
+                                    created_span_id, app_info.run_id, span_id, run_time, record.id
                                 )?;
 
                                 Some(TracingTreeRecordVariantDto::SpanRun(TracingSpanRunDto {
@@ -581,7 +657,7 @@ impl RunningApp {
                                     run_time: info.record_time.fixed_offset(),
                                     busy_duration: None,
                                     idle_duration: None,
-                                    record_id: record_index,
+                                    record_id: record.id,
                                     close_record_id: None,
                                     exception_end: Default::default(),
                                     run_elapsed: Some(0.),
@@ -622,10 +698,7 @@ impl RunningApp {
                                 writeln!(
                                     batch_inserter,
                                     r#"update tracing_span_run set busy_duration = '{}',idle_duration='{}',close_record_id='{}' where id = '{}';"#,
-                                    busy_duration,
-                                    idle_duration,
-                                    u64_to_i64(record_index),
-                                    created_span.id,
+                                    busy_duration, idle_duration, record.id, created_span.id,
                                 )?;
                                 Some(TracingTreeRecordVariantDto::SpanRun(TracingSpanRunDto {
                                     id: created_span.id,
@@ -634,8 +707,8 @@ impl RunningApp {
                                     run_time: created_span.record_time.fixed_offset(),
                                     busy_duration: Some(busy_duration),
                                     idle_duration: Some(idle_duration),
-                                    record_id: created_span.record_index,
-                                    close_record_id: Some(record_index),
+                                    record_id: created_span.record_id,
+                                    close_record_id: Some(record.id),
                                     exception_end: Default::default(),
                                     run_elapsed: Some(0.),
                                     fields: Arc::new(info.fields.clone().into_json_map()),
@@ -652,18 +725,18 @@ impl RunningApp {
                                     match &mut created_span.last_record_filed_id {
                                         None => {
                                             created_span.last_record_filed_id = Some((
-                                                record_index,
+                                                record.id,
                                                 core::mem::take(&mut info.fields),
                                             ));
                                         }
                                         Some((last_record_filed_id, fields)) => {
-                                            *last_record_filed_id = record_index;
+                                            *last_record_filed_id = record.id;
                                             fields.insert_other(&mut info.fields);
                                         }
                                     }
                                 }
 
-                                if !matches!(created_span.last_record_filed_id,Some((i,_))if i == record_index)
+                                if !matches!(created_span.last_record_filed_id,Some((i,_))if i == record.id)
                                 {
                                     continue;
                                 }
@@ -677,7 +750,7 @@ impl RunningApp {
                                         serde_json::to_writer(&mut json_buf, json_fields)?;
                                         anyhow::Ok(writeln!(
                                             batch_inserter,
-                                            r#"update tracing_span_run set fields = fields||'{}'::jsonb where id = '{}';"#,
+                                            r#"update tracing_span_run set fields = fields||$${}$$::jsonb where id = '{}';"#,
                                             String::from_utf8_lossy(json_buf.as_slice()),
                                             created_span_id,
                                         )?)
@@ -697,7 +770,7 @@ impl RunningApp {
                                     created_span.enter_span.replace(EnteredSpan {
                                         id,
                                         record_time: info.record_time,
-                                        record_index,
+                                        record_id: record.id,
                                     })
                                 {
                                     warn!(
@@ -708,14 +781,14 @@ impl RunningApp {
                                 let enter_span = created_span.enter_span.as_mut().unwrap();
                                 let created_span_id = created_span.id;
                                 let enter_span_id = enter_span.id;
-                                enter_span.record_index = record_index;
+                                enter_span.record_id = record.id;
                                 writeln!(
                                     batch_inserter,
                                     r#"insert into tracing_span_enter(id,span_run_id,enter_time,record_id) values ('{}','{}','{}','{}');"#,
                                     enter_span_id,
                                     created_span_id,
                                     info.record_time.fixed_offset(),
-                                    u64_to_i64(record_index),
+                                    record.id,
                                 )?;
 
                                 Some(TracingTreeRecordVariantDto::SpanEnter(
@@ -726,7 +799,7 @@ impl RunningApp {
                                         enter_elapsed: Some(0.),
                                         already_run: None,
                                         duration: None,
-                                        record_id: record_index,
+                                        record_id: record.id,
                                         leave_record_id: None,
                                     },
                                 ))
@@ -762,9 +835,7 @@ impl RunningApp {
                                 writeln!(
                                     batch_inserter,
                                     r#"update tracing_span_enter set duration = '{}',leave_record_id='{}' where id = '{}';"#,
-                                    duration_secs,
-                                    u64_to_i64(record_index),
-                                    enter_span_id,
+                                    duration_secs, record.id, enter_span_id,
                                 )?;
                                 Some(TracingTreeRecordVariantDto::SpanEnter(
                                     TracingSpanEnterDto {
@@ -774,8 +845,8 @@ impl RunningApp {
                                         enter_elapsed: Some(0.),
                                         already_run: None,
                                         duration: Some(duration_secs),
-                                        record_id: enter_span.record_index,
-                                        leave_record_id: Some(record_index),
+                                        record_id: enter_span.record_id,
+                                        leave_record_id: Some(record.id),
                                     },
                                 ))
                             }
@@ -797,7 +868,7 @@ impl RunningApp {
                                         app_info.clone(),
                                         fields.clone().into_json_value(),
                                         record_time.fixed_offset(),
-                                        u64_to_i64(record_index.clone()),
+                                        record.id as _,
                                     )
                                     .await?;
                                 Some(TracingTreeRecordVariantDto::AppRun(app_run_dto))
@@ -808,7 +879,7 @@ impl RunningApp {
                                 exception_end,
                                 ..
                             } => {
-                                let created_spans = core::mem::take(&mut self.created_spans);
+                                let created_spans = self.created_spans.clone();
                                 for (t_id, created_span) in created_spans {
                                     set_exception_end_for_span_run(
                                         &created_span.id,
@@ -826,14 +897,14 @@ impl RunningApp {
                                     .update_app_run_stop_time(
                                         app_info.run_id,
                                         record_time.fixed_offset(),
-                                        u64_to_i64(record_index),
-                                        (exception_end).then(|| true),
+                                        record.id as _,
+                                        exception_end.then(|| true),
                                     )
                                     .await?;
                                 Some(TracingTreeRecordVariantDto::AppRun(app_run_dto))
                             }
                         };
-                        self.dto_buf.push((record, record_index, r));
+                        self.dto_buf.push((record, r));
                     }
 
                     let other_update_prepare_duration = instant.elapsed();
@@ -852,9 +923,9 @@ impl RunningApp {
                         self.record_batch_inserter.execute(&self.tracing_service.dc),
                         batch_inserter.execute(&self.tracing_service.dc),
                         async {
-                            for (record, record_id, dto) in dto_buf.drain(..) {
+                            for (record, dto) in dto_buf.drain(..) {
                                 // writeln!(&mut string,"notify: {record:#?}, record_id: {record_id:?}");
-                                event_service.notify(record, record_id, dto).await;
+                                event_service.notify(record, dto).await;
                             }
                             Ok(())
                         }
@@ -867,6 +938,7 @@ impl RunningApp {
                 try_join!(future_1, future_2)?;
             }
             core::mem::swap(&mut buf_records_1, &mut buf_records_2);
+            assert_eq!(buf_records_1.len(),0);
 
             for x in buf_event_senders.drain(..) {
                 event_service.add_record_watcher(x.sender, x.filter);
@@ -896,14 +968,7 @@ impl RunningApp {
     fn update_to_no_empty_children(
         batch_inserter: &mut SqlBatchExecutor,
         created_span: &mut CreatedSpan,
-    ) -> Result<
-        (
-            TracingRecordVariant,
-            u64,
-            Option<TracingTreeRecordVariantDto>,
-        ),
-        std::fmt::Error,
-    > {
+    ) -> Result<(AppRunRecord, Option<TracingTreeRecordVariantDto>), std::fmt::Error> {
         let mut info = SpanFullInfo {
             base: created_span.span_base_info.clone(),
             fields: Default::default(),
@@ -914,11 +979,14 @@ impl RunningApp {
             r#"update tracing_record set fields = fields||'{{"{}": {}}}'::jsonb where id = '{}';"#,
             FIELD_DATA_EMPTY_CHILDREN,
             false,
-            u64_to_i64(created_span.record_index),
+            u64_to_i64(created_span.record_id),
         )?;
         Ok((
-            TracingRecordVariant::SpanRecord { info },
-            created_span.record_index,
+            AppRunRecord {
+                id: created_span.record_id,
+                record_index: created_span.record_index,
+                variant: TracingRecordVariant::SpanRecord { info },
+            },
             None,
         ))
     }

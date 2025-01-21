@@ -94,7 +94,7 @@ export function SelectedTreeItemProvider(props: {
   });
 
   return (
-    <CurSelectedTreeItem.Provider value={[signal[0],signal[1]]}>
+    <CurSelectedTreeItem.Provider value={[signal[0], signal[1]]}>
       {props.children}
     </CurSelectedTreeItem.Provider>
   );
@@ -888,6 +888,7 @@ function SelectedDetail(allProps: { data: SelectedTreeItem } & HTMLAttributes<HT
             <Match when={curTab() == "Info"}>
               <PropertyTable>
                 <PropertyRow label={"Id"}>{record.record.id}</PropertyRow>
+                <PropertyRow label={"RecordIndex"}>{record.record.recordIndex}</PropertyRow>
                 <PropertyRow label={"Content"}>{record.record.name}</PropertyRow>
                 <PropertyRow
                   label={"RecordTime"}>{record.record.recordTime?.toLocaleString()}</PropertyRow>
@@ -1410,7 +1411,7 @@ function TracingTreeItemList(allProps: {
       </Button>
     </Show>;
   let first = true;
-  let appScrollEndMarker:HTMLDivElement;
+  let appScrollEndMarker: HTMLDivElement;
   return (
     <Show when={data() != null}>
       <div {...forwardProps} class={cn("flex flex-col gap-1 pb-1.5 pt-1.5", forwardProps.class)} ref={setElementRef}>

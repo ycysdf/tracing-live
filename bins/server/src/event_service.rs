@@ -2,6 +2,7 @@ use std::sync::Arc;
 use tracing::error;
 
 use crate::record::TracingRecordVariant;
+use crate::running_app::AppRunRecord;
 use crate::tracing_service::{
    BigInt, TracingRecordFilter, TracingSpanRunDto, TracingTreeRecordVariantDto,
 };
@@ -26,14 +27,13 @@ impl EventService {
     #[inline]
     pub async fn notify(
        &mut self,
-       item: TracingRecordVariant,
-       record_id: u64,
+       item: AppRunRecord,
        variant_dto: Option<TracingTreeRecordVariantDto>,
     ) {
         for x in self.record_event_senders.iter_mut() {
-            x.2 = item.filter(&x.1)
+            x.2 = item.variant.filter(&x.1)
         }
-        let dto = item.into_dto(record_id);
+        let dto = item.into();
         let tree_record_dto = Arc::new(TracingTreeRecordDto::new(dto, variant_dto));
         for sender in self.record_event_senders.iter().filter(|n| n.2) {
             let _ = sender.0.send_async(tree_record_dto.clone()).await.inspect_err(|err| {
