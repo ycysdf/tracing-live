@@ -664,9 +664,9 @@ export function Traces() {
                     </div>
                   </div>
                 </div>
-                <Show when={useCurSelectedTreeItem().selected()} keyed>
-                  {n => <SelectedDetail class={"flex-grow-0"} style={{"max-height": `${leftElementHeight()}px`}}
-                                        data={n}/>}
+                <Show when={useCurSelectedTreeItem().selected()?.record} keyed>
+                  {_ => <SelectedDetail class={"flex-grow-0"} style={{"max-height": `${leftElementHeight()}px`}}
+                                        data={useCurSelectedTreeItem().selected()}/>}
                 </Show>
               </TraceTreeInfoProvider>
             </div>
@@ -844,7 +844,7 @@ function SelectedDetail(allProps: { data: SelectedTreeItem } & HTMLAttributes<HT
   let record = props.data.record;
   type Tab = "Info" | "Enter List" | "Field Record";
   let tabs: Tab[] = ["Info"];
-  switch (record.record.kind) {
+  switch (record.record?.kind) {
     case TracingKind.SpanCreate: {
       tabs.push("Enter List");
       tabs.push("Field Record");
@@ -1268,7 +1268,7 @@ function useCurSelectedTreeItem(): CurSelectedTreeItemContext {
     throw new Error("useSelectedTreeItem: cannot find a SelectedTreeItem")
   }
 
-  let isSelected = createSelector(() => context[0]()?.record.record.id, (a, b) => a != null && b != null && a == b)
+  let isSelected = createSelector(() => context[0]()?.record?.record?.id, (a, b) => a != null && b != null && a == b)
   return {
     selected: context[0],
     isSelected,
@@ -1710,12 +1710,13 @@ function TracingTreeItem(allProps: {
   layer: number
 } & HTMLAttributes<HTMLDivElement>) {
   let [props, rootProps] = splitProps(allProps, ['data', 'defaultIsExpand', 'appRunId', 'layer', 'isAppTable', 'layer', 'isEnd', 'class', 'path']);
-  let [isExpand, setIsExpand] = makePersisted(createSignal(props.defaultIsExpand || (getFlags(props.data.record, AUTO_EXPAND) ?? false)), {
-    name: `ed-${props.data.record.id}`,
-    storage: useSearchParamStorage(),
-    serialize: n => n ? "1" : undefined,
-    deserialize: n => n == "1"
-  });
+  // let [isExpand, setIsExpand] = makePersisted(createSignal(props.defaultIsExpand || (getFlags(props.data.record, AUTO_EXPAND) ?? false)), {
+  //   name: `ed-${props.data.record.id}`,
+  //   storage: useSearchParamStorage(),
+  //   serialize: n => n ? "1" : undefined,
+  //   deserialize: n => n == "1"
+  // });
+  let [isExpand, setIsExpand] = createSignal(props.defaultIsExpand || (getFlags(props.data.record, AUTO_EXPAND) ?? false));
   let [target, setTarget] = createSignal<HTMLElement>();
   let [itemTarget, setItemTarget] = createSignal<HTMLElement>();
   let needFixed = () => false;

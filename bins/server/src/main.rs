@@ -107,7 +107,7 @@ async fn main() -> anyhow::Result<()> {
                             .record_sender
                             .send(AppRunMsg::Record(AppRunRecord {
                                 id: RECORD_ID_GENERATOR.next(),
-                                record_index: msg.record_index,
+                                record_index: msg.record_index as _,
                                 variant: record,
                             }))
                     {

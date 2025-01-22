@@ -536,7 +536,7 @@ impl AppRunLifetime {
     async fn app_stop(
         mut self,
         normal_stop: Option<DateTime<Utc>>,
-        record_index: u64,
+        record_index: i64,
     ) -> Result<(), Status> {
         let exception_end = normal_stop.is_none();
         let record_time = normal_stop.clone().unwrap_or_else(|| {
@@ -713,6 +713,7 @@ impl TracingService for TracingServiceImpl {
                                 variant,
                                 record_index,
                             }) => {
+                                let record_index = record_index as i64;
                                 println!("{:?} .record_index: {record_index}",app_run_lifetime.app_run_info.run_id);
                                 error_count = 0;
                                 let variant = variant.unwrap();

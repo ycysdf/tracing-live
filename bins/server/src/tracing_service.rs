@@ -5,7 +5,7 @@ use crate::grpc_service::{
     FIELD_DATA_REPEATED_COUNT, FIELD_DATA_SPAN_T_ID, FIELD_DATA_STABLE_SPAN_ID,
 };
 use crate::record::{AppRunInfo, SpanCacheId, SpanId, TracingKind, TracingRecordVariant};
-use crate::{i64_to_u64, u64_to_i64};
+use crate::RECORD_ID_GENERATOR;
 use chrono::{DateTime, FixedOffset, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeDelta, Utc};
 use entity::app_build::{ActiveModel, Column};
 use entity::tracing_record::Model;
@@ -59,27 +59,25 @@ pub struct TracingRecordBatchInserter {
     sql: String,
     args: Option<PgArguments>,
     placeholder_num: usize,
-    pub id: u64,
 }
 
 impl TracingRecordBatchInserter {
-    pub fn new(id: u64) -> Self {
+    pub fn new() -> Self {
         Self {
             sql: INSERT_STR.to_string(),
             args: Some(PgArguments::default()),
             placeholder_num: 0,
-            id,
         }
     }
 }
 
 impl TracingRecordBatchInserter {
     pub const BIND_COL_COUNT: usize = 8;
-    pub async fn execute(&mut self, dc: &DatabaseConnection) -> Result<Range<u64>, Error> {
+    pub async fn execute(&mut self, dc: &DatabaseConnection) -> Result<(), Error> {
         if self.placeholder_num == 0 {
-            return Ok(0..0);
+            return Ok(());
         }
-        let count = self.placeholder_num / Self::BIND_COL_COUNT;
+        // let count = self.placeholder_num / Self::BIND_COL_COUNT;
         self.sql.pop();
         sqlx::query_with(self.sql.as_str(), self.args.take().unwrap())
             .execute(dc.get_postgres_connection_pool())
@@ -98,14 +96,14 @@ impl TracingRecordBatchInserter {
                 self.placeholder_num = 0;
                 self.args = Some(Default::default());
             })?;
-        Ok(((self.id + 1) - (count as u64))..(self.id + 1))
+        Ok(())
     }
 
     #[inline(always)]
     pub fn append_insert_record(
         &mut self,
-        id: u64,
-        record_index: u64,
+        id: i64,
+        record_index: i64,
         name: &str,
         record_time: &DateTime<FixedOffset>,
         kind: &str,
@@ -176,7 +174,6 @@ impl TracingRecordBatchInserter {
         self.sql.pop();
         self.sql.push_str("),");
 
-        self.id += 1;
         Ok(())
     }
 
@@ -256,8 +253,8 @@ pub struct AppLatestInfoDto {
 #[derive(Serialize, Clone, Debug, ToSchema)]
 pub struct TracingRecordDto {
     // TODO:
-    pub id: u64,
-    pub record_index: u64,
+    pub id: i64,
+    pub record_index: i64,
     pub app_id: Uuid,
     #[schema(value_type = String)]
     pub app_version: SmolStr,
@@ -298,8 +295,8 @@ pub struct TracingSpanRunDto {
     pub run_time: DateTime<FixedOffset>,
     pub busy_duration: Option<f64>,
     pub idle_duration: Option<f64>,
-    pub record_id: u64,
-    pub close_record_id: Option<u64>,
+    pub record_id: i64,
+    pub close_record_id: Option<i64>,
     pub exception_end: Option<DateTime<FixedOffset>>,
     pub run_elapsed: Option<f64>,
     #[schema(value_type = Object)]
@@ -324,8 +321,8 @@ impl From<tracing_span_run::Model> for TracingSpanRunDto {
             run_time: n.run_time,
             busy_duration: n.busy_duration,
             idle_duration: n.idle_duration,
-            record_id: i64_to_u64(n.record_id),
-            close_record_id: n.close_record_id.map(i64_to_u64),
+            record_id: n.record_id,
+            close_record_id: n.close_record_id,
             exception_end: n.exception_end,
             fields: Arc::new(
                 n.fields
@@ -349,8 +346,8 @@ pub struct TracingSpanEnterDto {
     pub enter_elapsed: Option<f64>,
     pub already_run: Option<Duration>,
     pub duration: Option<f64>,
-    pub record_id: u64,
-    pub leave_record_id: Option<u64>,
+    pub record_id: i64,
+    pub leave_record_id: Option<i64>,
 }
 
 impl From<tracing_span_enter::Model> for TracingSpanEnterDto {
@@ -362,8 +359,8 @@ impl From<tracing_span_enter::Model> for TracingSpanEnterDto {
             enter_elapsed: None,
             already_run: None,
             duration: n.duration,
-            record_id: i64_to_u64(n.record_id),
-            leave_record_id: n.leave_record_id.map(i64_to_u64),
+            record_id: n.record_id,
+            leave_record_id: n.leave_record_id,
         }
     }
 }
@@ -537,8 +534,8 @@ pub struct AppRunDto {
     #[schema(value_type = Object)]
     pub data: Arc<serde_json::Map<String, serde_json::Value>>,
     pub creation_time: DateTime<FixedOffset>,
-    pub record_id: u64,
-    pub stop_record_id: Option<u64>,
+    pub record_id: i64,
+    pub stop_record_id: Option<i64>,
     pub start_time: DateTime<FixedOffset>,
     pub stop_time: Option<DateTime<FixedOffset>>,
     pub exception_end: bool,
@@ -568,8 +565,8 @@ impl From<app_run::Model> for AppRunDto {
                 Default::default()
             }),
             creation_time: n.creation_time,
-            record_id: i64_to_u64(n.record_id),
-            stop_record_id: n.stop_record_id.map(i64_to_u64),
+            record_id: n.record_id,
+            stop_record_id: n.stop_record_id,
             start_time: n.start_time,
             stop_time: n.stop_time,
             exception_end: n.exception_end.unwrap_or_default(),
@@ -585,8 +582,8 @@ pub struct AppNodeRunDto {
     #[schema(value_type = Object)]
     pub data: Arc<serde_json::Map<String, serde_json::Value>>,
     pub creation_time: DateTime<FixedOffset>,
-    pub record_id: u64,
-    pub stop_record_id: Option<u64>,
+    pub record_id: i64,
+    pub stop_record_id: Option<i64>,
     pub start_time: DateTime<FixedOffset>,
     pub stop_time: Option<DateTime<FixedOffset>>,
     pub exception_end: bool,
@@ -613,6 +610,11 @@ impl TracingService {
 
     #[instrument(skip(self))]
     pub async fn init(&self) -> Result<(), DbErr> {
+        {
+            if let Some(id) = self.query_last_record_id().await? {
+                RECORD_ID_GENERATOR.reset(id + 1);
+            }
+        }
         if std::env::var("AUTO_INIT_DATABASE")
             .map(|n| n == "true")
             .unwrap_or(false)
@@ -775,13 +777,13 @@ impl TracingService {
                 records
                     .iter()
                     .filter(|n| n.kind == TracingKind::SpanEnter)
-                    .map(|n| u64_to_i64(n.id)),
+                    .map(|n| n.id),
             ),
             self.list_records_span_run_infos(
                 records
                     .iter()
                     .filter(|n| n.kind == TracingKind::SpanCreate)
-                    .map(|n| u64_to_i64(n.id)),
+                    .map(|n| n.id),
             ),
             self.list_records(TracingRecordFilter {
                 app_run_ids,
@@ -790,9 +792,7 @@ impl TracingService {
                     records
                         .iter()
                         .filter(|n| n.kind == TracingKind::SpanCreate
-                            && n.fields.contains_key(FIELD_DATA_IS_CONTAINS_RELATED
-                        )
-                    )
+                            && n.fields.contains_key(FIELD_DATA_IS_CONTAINS_RELATED))
                         .filter_map(|n| {
                             let r = n.span_t_id.as_ref().map(|n| n.parse().ok()).flatten();
                             r
@@ -805,7 +805,7 @@ impl TracingService {
                 records
                     .iter()
                     .filter(|n| n.kind == TracingKind::AppStart)
-                    .map(|n| u64_to_i64(n.id)),
+                    .map(|n| n.id),
             )
         );
         let mut span_enter_infos: HashMap<_, _> =
@@ -890,14 +890,13 @@ impl TracingService {
                 .collect(),
         })
     }
-    pub async fn query_last_record_id(&self, app_run_id: Uuid) -> Result<Option<u64>, DbErr> {
+    pub async fn query_last_record_id(&self) -> Result<Option<i64>, DbErr> {
         use tracing_record::*;
         let option = Entity::find()
-            .filter(Column::AppRunId.eq(app_run_id))
             .order_by_desc(Column::AppRunRecordIndex)
             .one(&self.dc)
             .await?;
-        Ok(option.map(|n| i64_to_u64(n.app_run_record_index)))
+        Ok(option.map(|n| n.app_run_record_index))
     }
     pub async fn list_records_by_ids(
         &self,
@@ -905,7 +904,7 @@ impl TracingService {
     ) -> Result<impl Iterator<Item = TracingRecordDto>, DbErr> {
         use tracing_record::*;
         Ok(Entity::find()
-            .filter(Column::AppRunRecordIndex.is_in(ids.into_iter().map(u64_to_i64)))
+            .filter(Column::AppRunRecordIndex.is_in(ids.into_iter()))
             .all(&self.dc)
             .await?
             .into_iter()
@@ -1081,9 +1080,7 @@ impl TracingService {
         } else {
             let mut records = select
                 .order_by_desc(Column::RecordTime)
-               .apply_if(filter.count,|n,count| {
-                   n.limit(count)
-               })
+                .apply_if(filter.count, |n, count| n.limit(count))
                 .all(&self.dc)
                 .await?;
 
@@ -1207,8 +1204,8 @@ impl TracingService {
                     Default::default()
                 }),
                 creation_time: model.creation_time,
-                record_id: i64_to_u64(model.record_id),
-                stop_record_id: model.stop_record_id.map(i64_to_u64),
+                record_id: model.record_id,
+                stop_record_id: model.stop_record_id,
                 start_time: model.start_time,
                 stop_time: model.stop_time,
                 exception_end: model.exception_end.unwrap_or_default(),
@@ -1738,8 +1735,8 @@ impl From<tracing_record::Model> for TracingRecordDto {
             (false, None, None, Default::default())
         };
         TracingRecordDto {
-            id: n.id as u64,
-            record_index: n.app_run_record_index as u64,
+            id: n.id,
+            record_index: n.app_run_record_index,
             app_id: n.app_id,
             app_version: n.app_version.into(),
             app_run_id: n.app_run_id,

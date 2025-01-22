@@ -10,7 +10,6 @@ use crate::tracing_service::{
     TracingService, TracingSpanEnterDto, TracingSpanRunDto, TracingTreeRecordDto,
     TracingTreeRecordVariantDto,
 };
-use crate::u64_to_i64;
 use anyhow::{anyhow, Context};
 use chrono::{DateTime, Local, Utc};
 use derive_more::Deref;
@@ -43,7 +42,7 @@ use uuid::Uuid;
 struct EnteredSpan {
     id: Uuid,
     record_time: DateTime<Utc>,
-    record_id: u64,
+    record_id: i64,
 }
 
 #[derive(Clone,Deref)]
@@ -54,11 +53,11 @@ struct CreatedSpan {
     parent_span_t_id: Option<u64>,
     total_enter_duration: chrono::Duration,
     enter_span: Option<EnteredSpan>,
-    record_id: u64,
-    record_index: u64,
+    record_id: i64,
+    record_index: i64,
     // 存储字段，合并通知字段更新
-    last_record_filed_id: Option<(u64, TracingFields)>,
-    last_repeated_event: Option<(u64, SmolStr, usize)>,
+    last_record_filed_id: Option<(i64, TracingFields)>,
+    last_repeated_event: Option<(i64, SmolStr, usize)>,
     sub_span_t_ids: SmallVec<[(u64, Uuid, bool); 8]>,
 }
 
@@ -69,8 +68,8 @@ struct RecordWatcher {
 
 #[derive(Clone, Debug)]
 pub struct AppRunRecord {
-    pub id: u64,
-    pub record_index: u64,
+    pub id: i64,
+    pub record_index: i64,
     pub variant: TracingRecordVariant,
 }
 
@@ -217,27 +216,15 @@ impl RunningApps {
                     record_receiver,
                     record_sender,
                 } => {
-                    let id = match self
-                        .tracing_service
-                        .query_last_record_id(run_info.run_id)
-                        .await
-                    {
-                        Ok(id) => id.unwrap_or(0),
-                        Err(err) => {
-                            error!("query_last_record_id error. {err}");
-                            continue;
-                        }
-                    };
                     let mut running_app = RunningApp::new(
                         self.tracing_service.clone(),
                         run_info.clone(),
-                        id,
                         self.config.clone(),
                     );
                     let task = tokio::spawn(async move {
                         running_app.handle_records(record_receiver).await.unwrap();
                     });
-                    if let Some(app) = self.running_apps.insert(
+                    if let Some(_app) = self.running_apps.insert(
                         run_info.run_id,
                         RunningAppInfo {
                             run_info: run_info.clone(),
@@ -342,7 +329,6 @@ impl RunningApp {
     pub fn new(
         tracing_service: TracingService,
         app_info: Arc<AppRunInfo>,
-        id: u64,
         config: Arc<TLConfig>,
     ) -> Self {
         Self {
@@ -352,7 +338,7 @@ impl RunningApp {
             created_spans: Default::default(),
             last_repeated_event: None,
             dto_buf: vec![],
-            record_batch_inserter: TracingRecordBatchInserter::new(id),
+            record_batch_inserter: TracingRecordBatchInserter::new(),
         }
     }
     /*
@@ -748,10 +734,17 @@ impl RunningApp {
                                     |json_fields| {
                                         json_buf.clear();
                                         serde_json::to_writer(&mut json_buf, json_fields)?;
+                                        let json = String::from_utf8_lossy(json_buf.as_slice());
+                                        let quote = "$$";
+                                        let quote  = if json.contains(quote) {
+                                            "$UU21c99cb0-e891-4764-a6c6-8b83a468bff7UU$"
+                                        }else {
+                                            quote
+                                        };
                                         anyhow::Ok(writeln!(
                                             batch_inserter,
-                                            r#"update tracing_span_run set fields = fields||$${}$$::jsonb where id = '{}';"#,
-                                            String::from_utf8_lossy(json_buf.as_slice()),
+                                            r#"update tracing_span_run set fields = fields||{quote}{}{quote}::jsonb where id = '{}';"#,
+                                            json,
                                             created_span_id,
                                         )?)
                                     },
@@ -979,7 +972,7 @@ impl RunningApp {
             r#"update tracing_record set fields = fields||'{{"{}": {}}}'::jsonb where id = '{}';"#,
             FIELD_DATA_EMPTY_CHILDREN,
             false,
-            u64_to_i64(created_span.record_id),
+            created_span.record_id,
         )?;
         Ok((
             AppRunRecord {

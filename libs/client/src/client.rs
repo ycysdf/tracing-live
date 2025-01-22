@@ -324,7 +324,7 @@ where
             }
             println!("debug end");
 
-            let _task_handle: tokio::task::JoinHandle<BinResult<()>> = tokio::spawn({
+            let _task_handle: tokio::task::JoinHandle<()> = tokio::spawn({
                 let records_io = setting.records_writer.clone();
                 let record_index_sender = record_index_sender.clone();
                 async move {
@@ -342,7 +342,7 @@ where
                         file.write_frames(
                             &mut *records_io,
                             buf_recv.iter().map(|n| (n.0.chunk(), n.1)),
-                        )?;
+                        ).unwrap();
                         if record_index_sender
                             .send(RecordMsg::NewRecord(buf_recv[0].1))
                             .is_err()
@@ -350,7 +350,6 @@ where
                             break;
                         }
                     }
-                    Ok(())
                 }
             });
 
@@ -369,13 +368,19 @@ where
                         match msg {
                             RecordMsg::NewRecord(_record_index) => {
                                 cur_record_index = _record_index;
-                                let mut records_io = setting.records_writer.lock().unwrap();
                                 if msg_sender.is_disconnected() {
+                                    println!("msg_sender.is_disconnected()");
                                     break;
                                 }
+                                println!("NewRecord cur_record_index: {cur_record_index:?}");
+                                let mut records_io = setting.records_writer.lock().unwrap();
+                                let _metadata = {
+                                    file.read_metadata(&mut *records_io).unwrap()
+                                };
                                 file.iter_from(
                                     &mut *records_io,
-                                    &_metadata.current_instance_header,
+                                    &_metadata,
+                                    &_metadata.current_instance_footer,
                                     cur_record_index,
                                     |msg| {
                                         println!("msg: {msg:?}");
@@ -449,6 +454,7 @@ where
                                         ) {
                                             let mut app_stop = Some(param);
                                             yield_now().await;
+                                            // tokio::time::sleep(Duration::from_secs(10)).await;
                                             let param = msg_receiver
                                                 .try_recv()
                                                 .ok()
@@ -482,6 +488,7 @@ where
                                         }
                                     }
                                 }
+                                println!("servre app_run stream end");
                                 return;
                             }
                             Err(err) => {

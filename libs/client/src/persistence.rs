@@ -67,7 +67,7 @@ pub struct TLRecordsInstanceFooter {
     pub id: u128,
     pub prev: MemorySpan,              // 0 as None
     pub last_record_index: u64,        // 0 as None
-    pub last_block_header: MemorySpan, // 0 as None
+    pub last_block_header: MemorySpan, // 0 as None . None if is current instance
     pub span: MemorySpan,
 }
 
@@ -86,7 +86,7 @@ impl TLRecordInfo {
     pub const SIZE: usize = MemorySpan::SIZE;
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[binrw]
 #[brw(little)]
 pub struct TLBlockHeader {
@@ -117,7 +117,7 @@ pub struct TLRecordsMetadata {
     pub app_run_count: u32,
     pub share_compression_dictionary: MemorySpan,
     pub cur_pos: u64,
-    pub current_instance_header: TLRecordsInstanceFooter,
+    pub current_instance_footer: TLRecordsInstanceFooter,
     pub current_block_header: TLBlockHeader,
 }
 
@@ -131,20 +131,20 @@ impl TLRecordsMetadata {
 
     pub fn add_size(&mut self, size: u64) -> MemorySpan {
         let pos = self.cur_pos;
-        self.current_instance_header.span.add_size(size);
+        self.current_instance_footer.span.add_size(size);
         self.cur_pos += size;
         MemorySpan { pos, size }
     }
     pub fn append_instance_header(&mut self, instance_size: usize) -> MemorySpan {
         self.app_run_count += 1;
         self.current_block_header = Default::default();
-        self.current_instance_header.prev = self.add_size(instance_size as _);
-        self.current_instance_header.prev
+        self.current_instance_footer.prev = self.add_size(instance_size as _);
+        self.current_instance_footer.prev
     }
     pub fn append_block_header(&mut self, block_size: usize) -> MemorySpan {
         self.current_block_header = Default::default();
         self.current_block_header.prev = self.add_size(block_size as _);
-        self.current_instance_header.last_block_header = self.current_block_header.prev;
+        self.current_instance_footer.last_block_header = self.current_block_header.prev;
         self.current_block_header.span.pos = self.cur_pos;
         self.current_block_header.prev
     }
@@ -155,7 +155,7 @@ impl TLRecordsMetadata {
         self.current_block_header.records_info[block_record_index as usize].memory_span =
             memory_span;
         self.current_block_header.span.add_size(record_size as u64);
-        self.current_instance_header.last_record_index = record_index;
+        self.current_instance_footer.last_record_index = record_index;
         memory_span
     }
 }
@@ -176,7 +176,7 @@ impl RecordsPersistenceToFile {
         let mut records_metadata = TLRecordsMetadata {
             app_run_count: 1,
             cur_pos: 0,
-            current_instance_header: TLRecordsInstanceFooter {
+            current_instance_footer: TLRecordsInstanceFooter {
                 id: instance_id,
                 prev: MemorySpan::NONE,
                 last_record_index: 0,
@@ -188,7 +188,7 @@ impl RecordsPersistenceToFile {
         };
         records_metadata.cur_pos = TLRecordsMetadata::SIZE as _;
         records_metadata.current_block_header.span.pos = records_metadata.cur_pos;
-        records_metadata.current_instance_header.span.pos = records_metadata.cur_pos;
+        records_metadata.current_instance_footer.span.pos = records_metadata.cur_pos;
 
         stream.rewind()?;
         records_metadata.write(&mut stream)?;
@@ -222,9 +222,9 @@ impl RecordsPersistenceToFile {
             self.decompressor_with_dict = decompressor_with_dict;
             r??;
         }
-        if records_metadata.current_instance_header.id != instance_id {
+        if records_metadata.current_instance_footer.id != instance_id {
             stream.seek(SeekFrom::Start(records_metadata.cur_pos))?;
-            records_metadata.current_instance_header.last_block_header =
+            records_metadata.current_instance_footer.last_block_header =
                 self.write_block_footer(&mut stream, &mut records_metadata)?;
             self.write_instance_footer(&mut stream, &mut records_metadata, instance_id)?;
 
@@ -257,14 +257,14 @@ impl RecordsPersistenceToFile {
         mut stream: impl RWS,
         records_metadata: &TLRecordsMetadata,
     ) -> BinResult<()> {
-        if records_metadata.current_instance_header.span.is_none() {
+        if records_metadata.current_instance_footer.span.is_none() {
             return Ok(());
         }
         let instant = Instant::now();
         let instances = self.read_instances(&mut stream)?;
         let mut c = 0;
         for instance in instances.iter().filter(|n| n.span.size != 0) {
-            self.iter_from(&mut stream, &instance, 0, |msg| {
+            self.iter_from(&mut stream, records_metadata.clone(), &instance, 0, |msg| {
                 c += 1;
             })?;
         }
@@ -277,34 +277,30 @@ impl RecordsPersistenceToFile {
     pub fn blocks_from(
         &mut self,
         mut stream: impl RWS,
+        records_metadata: &TLRecordsMetadata,
         instance_footer: &TLRecordsInstanceFooter,
         from_block_index: u64,
         to: &mut Vec<TLBlockHeader>,
     ) -> BinResult<()> {
         stream.rewind()?;
-        let mut records_metadata: TLRecordsMetadata = TLRecordsMetadata::read(&mut stream)?;
         let mut cur_block_index = instance_footer.last_record_index / RECORD_BLOCK_SIZE as u64;
-        if instance_footer.id == records_metadata.current_instance_header.id
-            && instance_footer.last_block_header.is_none()
-        {
+        let mut header = if instance_footer.id == records_metadata.current_instance_footer.id {
+            to.push(records_metadata.current_block_header.clone());
             match cur_block_index.cmp(&from_block_index) {
                 Ordering::Less => return Ok(()),
                 Ordering::Equal => {
-                    to.push(records_metadata.current_block_header);
                     return Ok(());
                 }
                 Ordering::Greater => {}
             }
+            records_metadata.current_block_header.prev
+        } else {
+            instance_footer.last_block_header
         };
-        let mut header = instance_footer.last_block_header;
-        for i in (0..=cur_block_index).rev() {
+        while !header.is_none() {
             let block_header = self.read_block_footer(&mut stream, header)?;
             header = block_header.prev;
-            if i >= from_block_index {
-                to.push(block_header);
-            } else {
-                break;
-            }
+            to.push(block_header);
         }
         Ok(())
     }
@@ -315,15 +311,22 @@ impl RecordsPersistenceToFile {
         }
         Ok(result)
     }
+    pub fn read_metadata(&self, mut stream: impl RWS) -> BinResult<TLRecordsMetadata> {
+        let pos = stream.stream_position()?;
+        stream.rewind()?;
+        let records_metadata: TLRecordsMetadata = TLRecordsMetadata::read(&mut stream)?;
+        stream.seek(SeekFrom::Start(pos))?;
+        Ok(records_metadata)
+    }
     pub fn iter_instances<'a>(
         &'a mut self,
         mut stream: impl RWS + 'a,
     ) -> BinResult<impl Iterator<Item = BinResult<TLRecordsInstanceFooter>> + 'a> {
         stream.rewind()?;
         let mut records_metadata: TLRecordsMetadata = TLRecordsMetadata::read(&mut stream)?;
-        let mut prev = records_metadata.current_instance_header.prev;
+        let mut prev = records_metadata.current_instance_footer.prev;
         Ok(
-            core::iter::once(Ok(records_metadata.current_instance_header)).chain(
+            core::iter::once(Ok(records_metadata.current_instance_footer)).chain(
                 core::iter::from_fn(move || {
                     if prev.is_none() {
                         return None;
@@ -342,29 +345,38 @@ impl RecordsPersistenceToFile {
     pub fn blocks(
         &mut self,
         stream: impl RWS,
+        records_metadata: &TLRecordsMetadata,
         instance_footer: &TLRecordsInstanceFooter,
     ) -> BinResult<Vec<TLBlockHeader>> {
         let mut result = vec![];
-        self.blocks_from(stream, instance_footer, 0, &mut result)?;
+        self.blocks_from(stream, records_metadata, instance_footer, 0, &mut result)?;
         Ok(result)
     }
 
     pub fn iter_from(
         &mut self,
         mut stream: impl RWS,
+        records_metadata: &TLRecordsMetadata,
         instance_footer: &TLRecordsInstanceFooter,
         from_record_index: u64,
         mut records_callback: impl FnMut(TLMsg),
     ) -> BinResult<()> {
         let block_index = from_record_index / RECORD_BLOCK_SIZE as u64;
         let mut blocks = vec![];
-        self.blocks_from(&mut stream, instance_footer, block_index, &mut blocks)?;
+        self.blocks_from(
+            &mut stream,
+            records_metadata,
+            instance_footer,
+            block_index,
+            &mut blocks,
+        )?;
         if blocks.is_empty() {
             return Ok(());
         }
         // println!("blocks[0]: {:?}",blocks[0]);
         blocks.reverse();
-        for (i, record_info) in blocks[0].records_info[(from_record_index  as usize - block_index  as usize * RECORD_BLOCK_SIZE)..]
+        for (i, record_info) in blocks[0].records_info
+            [(from_record_index as usize - block_index as usize * RECORD_BLOCK_SIZE)..]
             .iter()
             .enumerate()
             .filter(|n| !n.1.memory_span.is_none())
@@ -475,17 +487,20 @@ impl RecordsPersistenceToFile {
     ) -> BinResult<()> {
         stream.seek(SeekFrom::Start(0))?;
         let mut records_metadata = TLRecordsMetadata::read(&mut stream).unwrap();
-        let mut last_record_index = records_metadata.current_instance_header.last_record_index;
+        let mut last_record_index = records_metadata.current_instance_footer.last_record_index;
         let mut cur_block_index = last_record_index / RECORD_BLOCK_SIZE as u64;
         stream.seek(SeekFrom::Start(records_metadata.cur_pos))?;
 
         {
             for (frame, record_index) in frames {
+                println!("record_index {}", record_index);
                 let block_index = record_index / RECORD_BLOCK_SIZE as u64;
                 if block_index != cur_block_index {
+                    println!("new block {}", block_index);
                     assert_eq!(block_index - 1, cur_block_index);
                     cur_block_index = block_index;
                     if records_metadata.share_compression_dictionary.is_none() {
+                        println!("frame_samples");
                         let mut frame_samples = Vec::with_capacity(RECORD_BLOCK_SIZE);
                         for (record_index, record_info) in records_metadata
                             .current_block_header
@@ -510,15 +525,15 @@ impl RecordsPersistenceToFile {
                             .set_dictionary(self.compression_level, dict.as_slice())?;
 
                         records_metadata =
-                            self.reset(&mut stream, records_metadata.current_instance_header.id)?;
+                            self.reset(&mut stream, records_metadata.current_instance_footer.id)?;
                         last_record_index =
-                            records_metadata.current_instance_header.last_record_index;
+                            records_metadata.current_instance_footer.last_record_index;
 
                         stream.seek(SeekFrom::Start(records_metadata.cur_pos))?;
                         stream.write_all(dict.as_slice())?;
                         records_metadata.share_compression_dictionary =
                             records_metadata.add_size(dict.len() as _);
-                        records_metadata.current_instance_header.span = MemorySpan {
+                        records_metadata.current_instance_footer.span = MemorySpan {
                             pos: records_metadata.cur_pos,
                             size: 0,
                         };
@@ -530,7 +545,6 @@ impl RecordsPersistenceToFile {
                         self.update_header(&mut stream, &records_metadata)?;
 
                         for (frame, record_index) in frame_samples {
-                            println!("record_index: {record_index:?}");
                             self.write_frame(
                                 &mut stream,
                                 &mut records_metadata,
@@ -572,7 +586,7 @@ impl RecordsPersistenceToFile {
         self.cursor_buf.get_mut().clear();
         self.cursor_buf.seek(SeekFrom::Start(0))?;
         records_metadata
-            .current_instance_header
+            .current_instance_footer
             .write(&mut self.cursor_buf)?;
 
         self.buf.clear();
@@ -590,13 +604,13 @@ impl RecordsPersistenceToFile {
         let end_pos = stream.stream_position()?;
         assert_eq!(records_metadata.cur_pos, end_pos);
 
-        records_metadata.current_instance_header.id = instance_id;
-        records_metadata.current_instance_header.span = MemorySpan {
+        records_metadata.current_instance_footer.id = instance_id;
+        records_metadata.current_instance_footer.span = MemorySpan {
             pos: end_pos,
             size: 0,
         };
-        records_metadata.current_instance_header.last_record_index = 0;
-        records_metadata.current_instance_header.last_block_header = MemorySpan::NONE;
+        records_metadata.current_instance_footer.last_record_index = 0;
+        records_metadata.current_instance_footer.last_block_header = MemorySpan::NONE;
         Ok(memory_span)
     }
 
@@ -837,7 +851,12 @@ impl TracingLiveMsgSubscriber for EncodeBytesSubscriber {
             //     .total_size
             //     .fetch_add(buf.len() as _, std::sync::atomic::Ordering::SeqCst);
             // println!("total_size: {total_size:?}");
-            let _ = self.sender.send((buf.split().freeze(), msg.record_index()));
+            if let Err(err) = self
+                .sender
+                .send((buf.split().freeze(), msg.record_index()))
+            {
+                eprintln!("send error: {err}. msg: {msg:?}");
+            }
         })
     }
 }
