@@ -1,8 +1,5 @@
 import {A, RouteSectionProps, useLocation, useNavigate, useParams} from "@solidjs/router";
-import {Select, SelectContent, SelectItem, SelectTrigger, SelectValue} from "~/components/ui/select";
-import {getApps} from "~/cache";
 import {createResource, createSignal, For, JSX, Show, Suspense} from "solid-js";
-import {AppLatestInfoDto} from "~/openapi";
 import {Link} from "@kobalte/core/link";
 import {
   ArrowLeftFromLine,

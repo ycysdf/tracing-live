@@ -714,7 +714,7 @@ impl TracingService for TracingServiceImpl {
                                 record_index,
                             }) => {
                                 let record_index = record_index as i64;
-                                println!("{:?} .record_index: {record_index}",app_run_lifetime.app_run_info.run_id);
+                                // println!("{:?} .record_index: {record_index}",app_run_lifetime.app_run_info.run_id);
                                 error_count = 0;
                                 let variant = variant.unwrap();
                                 let variant = if let record_param::Variant::AppStop(_) = variant {

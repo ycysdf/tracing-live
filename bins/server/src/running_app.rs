@@ -573,7 +573,7 @@ impl RunningApp {
                         let app_info = record.variant.app_info().clone();
                         let r = match &mut record.variant {
                             TracingRecordVariant::SpanCreate { info, .. } => {
-                                println!("SpanCrate: {}. record_index: {}",info.span_info.t_id,record.record_index);
+                                // println!("SpanCrate: {}. record_index: {}",info.span_info.t_id,record.record_index);
                                 if let Some(_previous) = self.created_spans.insert(
                                     info.span_info.t_id,
                                     CreatedSpan {

@@ -172,7 +172,7 @@ impl RecordsPersistenceToFile {
         instance_id: u128,
     ) -> BinResult<TLRecordsMetadata> {
         stream.rewind()?;
-        println!("NEW INIT");
+        // println!("NEW INIT");
         let mut records_metadata = TLRecordsMetadata {
             app_run_count: 1,
             cur_pos: 0,
@@ -269,7 +269,7 @@ impl RecordsPersistenceToFile {
             })?;
         }
 
-        println!("debug elapsed: {:?}. count: {c}", instant.elapsed());
+        // println!("debug elapsed: {:?}. count: {c}", instant.elapsed());
 
         Ok(())
     }
@@ -493,14 +493,14 @@ impl RecordsPersistenceToFile {
 
         {
             for (frame, record_index) in frames {
-                println!("record_index {}", record_index);
+                // println!("record_index {}", record_index);
                 let block_index = record_index / RECORD_BLOCK_SIZE as u64;
                 if block_index != cur_block_index {
-                    println!("new block {}", block_index);
+                    // println!("new block {}", block_index);
                     assert_eq!(block_index - 1, cur_block_index);
                     cur_block_index = block_index;
                     if records_metadata.share_compression_dictionary.is_none() {
-                        println!("frame_samples");
+                        // println!("frame_samples");
                         let mut frame_samples = Vec::with_capacity(RECORD_BLOCK_SIZE);
                         for (record_index, record_info) in records_metadata
                             .current_block_header
@@ -509,7 +509,7 @@ impl RecordsPersistenceToFile {
                             .enumerate()
                             .filter(|n| !n.1.memory_span.is_none())
                         {
-                            println!("record_info: {record_info:?}");
+                            // println!("record_info: {record_info:?}");
                             self.read_and_decode(&mut stream, record_info.memory_span, |bytes| {
                                 frame_samples.push((bytes.to_vec(), record_index))
                             })?;

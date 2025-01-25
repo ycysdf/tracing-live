@@ -2,10 +2,10 @@
 
 import {createAsync, useSearchParams} from "@solidjs/router";
 import {
-  Accessor,
+  Accessor, batch,
   createContext,
   createEffect,
-  createMemo, createResource, createSelector,
+  createMemo, createSelector,
   createSignal,
   For,
   JSX, Match,
@@ -15,7 +15,7 @@ import {
   splitProps, startTransition,
   Suspense,
   Switch, untrack,
-  useContext, useTransition
+  useContext
 } from "solid-js";
 import {
   AppNodeRunDto,
@@ -39,24 +39,27 @@ import {
   NULL_STR,
   RECORD_FIELDS
 } from "~/consts";
-import {getNodesPage} from "~/cache";
 import {useRecordsTreeLive} from "~/lib/use_records_live";
-import {ChevronDown, ChevronRight, ChevronsUpDown, Dot, FoldVertical, LogIn, UnfoldVertical} from "lucide-solid";
+import {
+  Dot, ChevronRight,
+  ChevronDown,
+  FoldVertical,
+  LogIn,
+  UnfoldVertical
+} from "lucide-solid";
 import {AsyncStorage, makePersisted, SyncStorage} from "@solid-primitives/storage";
 import {Loading, LoadingPanel} from "~/components/Loading";
 import {createElementBounds} from "@solid-primitives/bounds";
-import {AUTO_EXPAND, createMultiSelection, getFlags, useIsolateTransition} from "~/utils";
+import {AUTO_EXPAND, createMultiSelection, getFlags} from "~/utils";
 import {Button} from "~/components/ui/button";
 import HTMLAttributes = JSX.HTMLAttributes;
 import {Checkbox} from "~/components/ui/checkbox";
-import {createMutable, createStore, produce, reconcile, unwrap} from "solid-js/store";
+import {createStore, produce, reconcile} from "solid-js/store";
 import {cn} from "~/lib/utils";
 import qs from "qs";
 import byteSize, {ByteSizeOptions} from "byte-size";
 import humanizeDuration from "humanize-duration";
 import {Key} from "@solid-primitives/keyed";
-import {VirtualList} from "@solid-primitives/virtual";
-import {Index} from 'solid-js';
 import {debounce, Scheduled} from "@solid-primitives/scheduled";
 import {AppEmpty} from "~/components/Empty";
 import {t} from "i18next";
@@ -64,9 +67,7 @@ import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
-  ContextMenuTrigger,
-  ContextMenuSeparator,
-  ContextMenuGroupLabel, ContextMenuShortcut
+  ContextMenuTrigger
 } from "~/components/ui/context-menu";
 import {HttpClient} from "~/http_client";
 
@@ -185,7 +186,7 @@ export function useNodePageData(input: Accessor<NodesPageRequest>): [NodesPageDt
   let isLoading = createIsLoading();
   let nodesPageAccessor = createAsync(async () => {
     return await isLoading.loadingScoped(async () => {
-      return await getNodesPage(input())
+      return await HttpClient.nodesPage(input())
     });
   });
   createEffect(async () => {
@@ -360,17 +361,6 @@ export function Traces() {
     return bounds.height;
   });
 
-  createEffect(() => {
-    if (nodesPage == null || (nodesPage.nodes?.length ?? 0) == 0) {
-      return;
-    }
-    let selectedNodes = nodeSelection.selected();
-    let validSelectedNodes = selectedNodes.filter(n => nodesPage.nodes.map(n => n.nodeId).includes(n));
-    if (selectedNodes.length != validSelectedNodes.length) {
-      nodeSelection.setSelected(validSelectedNodes);
-    }
-  });
-
   let nodesContainerElement: HTMLDivElement;
 
   let [nodeSearch, _setNodeSearch] = createSignal('');
@@ -399,11 +389,15 @@ export function Traces() {
                       class={"flex gap-1 text-nowrap items-center hover:bg-stone-100 cursor-pointer rounded px-2 py-1 -my-1"}
                       onClick={() => {
                         appSelection.toggle(n.id);
+                        nodeSelection.clear();
                       }}>
                       <Checkbox onClick={async (e) => {
                         e.preventDefault();
                         e.stopPropagation();
-                        appSelection.toggle(n.id);
+                        batch(() => {
+                          nodeSelection.clear();
+                          appSelection.toggle(n.id);
+                        })
                       }} checked={appSelection.isSelect(n.id)}/>
                       <div class="text-sm">{n.name} ( {n.nodeCount} )</div>
                     </div>}

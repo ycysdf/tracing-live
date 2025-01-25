@@ -316,8 +316,8 @@ where
                 let mut records_io = setting.records_writer.lock().unwrap();
                 file.init(run_id.as_u128(), &mut *records_io).unwrap()
             };
-            println!("records_metadata: {:#?}", metadata.cur_pos);
-            println!("init end");
+            // println!("records_metadata: {:#?}", metadata.cur_pos);
+            // println!("init end");
             {
                 let mut records_io = setting.records_writer.lock().unwrap();
                 file.debug(&mut *records_io, &metadata).unwrap();
@@ -342,7 +342,8 @@ where
                         file.write_frames(
                             &mut *records_io,
                             buf_recv.iter().map(|n| (n.0.chunk(), n.1)),
-                        ).unwrap();
+                        )
+                        .unwrap();
                         if record_index_sender
                             .send(RecordMsg::NewRecord(buf_recv[0].1))
                             .is_err()
@@ -374,9 +375,7 @@ where
                                 }
                                 println!("NewRecord cur_record_index: {cur_record_index:?}");
                                 let mut records_io = setting.records_writer.lock().unwrap();
-                                let _metadata = {
-                                    file.read_metadata(&mut *records_io).unwrap()
-                                };
+                                let _metadata = { file.read_metadata(&mut *records_io).unwrap() };
                                 file.iter_from(
                                     &mut *records_io,
                                     &_metadata,
@@ -523,36 +522,5 @@ where
                 is_normal_drop: false,
             },
         ))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use tokio::io::AsyncWriteExt;
-
-    #[tokio::test]
-    async fn ff() {
-        let x = tokio::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .read(true)
-            .open("./test.txt")
-            .await
-            .unwrap();
-        let mut x = async_compression::tokio::write::ZstdEncoder::new(x);
-        x.write_all(b"{FFDSFNFSJFS{SFADFSNSDFKFDKJ}").await.unwrap();
-        x.flush().await.unwrap();
-        let len = x.get_mut().metadata().await.unwrap().len();
-        println!("len: {len:?}");
-        x.write_all(b"{FFDSFNFSJFS{SFADFSNSDFKFDKJ}").await.unwrap();
-        x.flush().await.unwrap();
-        let len = x.get_mut().metadata().await.unwrap().len();
-        println!("len: {len:?}");
-        for _ in 0..100 {
-            x.write_all(b"{FFDSFNFSJFS{SFADFSNSDFKFDKJ}").await.unwrap();
-            x.flush().await.unwrap();
-            let len = x.get_mut().metadata().await.unwrap().len();
-            println!("len: {len:?}");
-        }
     }
 }

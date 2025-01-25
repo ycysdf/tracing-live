@@ -1,7 +1,7 @@
 import {JSX, splitProps} from "solid-js";
-import HTMLAttributes = JSX.HTMLAttributes;
 import {t} from "i18next";
 import {cn} from "~/lib/utils";
+import HTMLAttributes = JSX.HTMLAttributes;
 
 export function AppEmpty(allProps: HTMLAttributes<HTMLDivElement>) {
   let [props, rootProps] = splitProps(allProps, ["children", "class"]);
