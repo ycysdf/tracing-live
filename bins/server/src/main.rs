@@ -8,13 +8,15 @@ use tokio::net::TcpListener;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Server;
 use tower_http::compression::CompressionLayer;
-use tracing::{info, info_span, instrument, warn, Instrument, Span};
+use tracing::{error, info_span, instrument, warn, Instrument, Span};
 use tracing_lv_core::{
     proto::tracing_service_server::TracingServiceServer,
     proto::{record_param, RecordParam},
     MsgReceiverSubscriber, TLAppInfo, TLAppInfoExt, TLLayer,
 };
-use tracing_lv_server::running_app::{AppRunMsg, AppRunRecord, TLConfig};
+use tracing_lv_server::running_app::{
+    AppRunMsg, AppRunRecord, TLConfig, POSTGRESQL_MAX_BIND_PARAM_COUNT,
+};
 use tracing_lv_server::tracing_service::TracingRecordBatchInserter;
 use tracing_lv_server::{
     build,
@@ -22,12 +24,12 @@ use tracing_lv_server::{
     running_app::RunMsg,
     running_app::RunningApps,
     tracing_service::TracingService,
-    web_service, RECORD_ID_GENERATOR,
+    web_service, RECORD_ID_GENERATOR, SELF_APP_ID,
 };
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
-use uuid::{uuid, Uuid};
+use uuid::Uuid;
 
 #[instrument]
 fn program_panic_catch() {
@@ -78,21 +80,18 @@ async fn main() -> anyhow::Result<()> {
         let (app_run_msg_sender, app_run_msg_receiver) = flume::unbounded::<AppRunMsg>();
         tokio::spawn(async move {
             let fut = async move {
-                let app_info = TLAppInfo::new(
-                    uuid!("51E5297E-949F-DABC-76B1-F34E5FCEA32F"),
-                    "Tracing Live Server",
-                    build::PKG_VERSION,
-                )
-                .node_name("Server");
-                let mut self_lifetime = AppRunLifetime::new(
+                let app_info =
+                    TLAppInfo::new(SELF_APP_ID, "Tracing Live Server", build::PKG_VERSION)
+                        .node_name("Server");
+                let (mut self_lifetime, app_run_record) = AppRunLifetime::new(
                     app_info.into_app_start(Uuid::new_v4(), Duration::default()),
                     tracing_service,
                     app_run_msg_sender,
                 )
                 .await?;
                 msg_sender.send(RunMsg::AppRun {
+                    app_run_record,
                     record_sender: self_lifetime.record_sender.clone(),
-                    run_info: self_lifetime.app_run_info.clone(),
                     record_receiver: app_run_msg_receiver,
                 })?;
                 while let Ok(msg) = self_record_receiver.recv_async().await {
@@ -111,7 +110,7 @@ async fn main() -> anyhow::Result<()> {
                                 variant: record,
                             }))
                     {
-                        info!(?err, "record_sender send failed. exit!");
+                        error!(?err, "record_sender send failed. exit!");
                         break;
                     }
                 }
@@ -130,7 +129,6 @@ async fn main() -> anyhow::Result<()> {
             .map(|n| n.parse::<usize>().ok())
             .flatten();
         async move {
-            const POSTGRESQL_MAX_BIND_PARAM_COUNT: usize = 32767;
             let max_buf_count_max_value =
                 POSTGRESQL_MAX_BIND_PARAM_COUNT / TracingRecordBatchInserter::BIND_COL_COUNT;
             let record_max_buf_count = max_buf_count
@@ -161,7 +159,7 @@ async fn main() -> anyhow::Result<()> {
     let https_web_serve_future = tokio::spawn({
         let addr = SocketAddr::from((
             Ipv4Addr::UNSPECIFIED,
-            std::env::var("WEB_PORT")
+            env::var("WEB_PORT")
                 .ok()
                 .map(|n| n.parse().ok())
                 .flatten()
@@ -192,7 +190,7 @@ async fn main() -> anyhow::Result<()> {
     let grpc_serve_future = tokio::spawn({
         let addr = SocketAddr::from((
             Ipv4Addr::UNSPECIFIED,
-            std::env::var("GRPC_PORT")
+            env::var("GRPC_PORT")
                 .ok()
                 .map(|n| n.parse().ok())
                 .flatten()

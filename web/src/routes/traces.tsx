@@ -1989,7 +1989,7 @@ function TracingRunTimer(props: {
       <div
         class={cn("p-1", props.endTimeMs() != null ? "bg-stone-100 text-primary" : props.badEnd ? "bg-red-400 text-muted" : "bg-blue-600/80 text-muted")}>{props.endTimeMs() != null ? props.badEnd ? 'exception' : 'end' : 'run'}</div>
       <div
-        class="bg-background border-l p-1 select-none">{humanizeDuration(props.endTimeMs() ? (props.endTimeMs() - props.startTimeMs) : runElapsed(), durationOptions)}</div>
+        class="bg-background border-l p-1 text-nowrap select-none">{humanizeDuration(props.endTimeMs() ? (props.endTimeMs() - props.startTimeMs) : runElapsed(), durationOptions)}</div>
     </div>
   )
 }

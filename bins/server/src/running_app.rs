@@ -1,15 +1,16 @@
 use crate::event_service::EventService;
+use crate::global_data::GLOBAL_DATA;
 use crate::grpc_service::{
     SpanFullInfo, SpanFullInfoBase, SpanInfo, TracingFields, TracingRecordFlags,
     TracingServiceImpl, FIELD_DATA_EMPTY_CHILDREN, FIELD_DATA_FIRST_EVENT, FIELD_DATA_FLAGS,
     FIELD_DATA_IS_CONTAINS_RELATED, FIELD_DATA_REPEATED_COUNT,
 };
-use crate::record::{AppRunInfo, SpanId, TracingRecordVariant};
+use crate::record::{AppRunInfo, SpanId, TracingKind, TracingRecordVariant};
 use crate::tracing_service::{
-    AppRunDto, BigInt, TracingRecordBatchInserter, TracingRecordDto, TracingRecordFilter,
-    TracingService, TracingSpanEnterDto, TracingSpanRunDto, TracingTreeRecordDto,
-    TracingTreeRecordVariantDto,
+    AppRunDto, TracingRecordBatchInserter, TracingRecordDto, TracingRecordFilter, TracingService,
+    TracingSpanEnterDto, TracingSpanRunDto, TracingTreeRecordDto, TracingTreeRecordVariantDto,
 };
+use crate::RECORD_ID_GENERATOR;
 use anyhow::{anyhow, Context};
 use chrono::{DateTime, Local, Utc};
 use derive_more::Deref;
@@ -24,7 +25,7 @@ use sea_orm::{
 use smallvec::SmallVec;
 use smol_str::{SmolStr, ToSmolStr};
 use std::collections::{HashMap, VecDeque};
-use std::fmt::Write;
+use std::fmt::{Debug, Formatter, Write};
 use std::future::Future;
 use std::panic::Location;
 use std::sync::Arc;
@@ -35,33 +36,39 @@ use tokio::time::Instant;
 use tokio::{join, try_join};
 use tonic::Status;
 use tracing::{error, info, warn};
+use tracing_lv_core::proto;
 use tracing_lv_core::proto::FieldValue;
 use uuid::Uuid;
 
-#[derive(Debug,Clone)]
-struct EnteredSpan {
-    id: Uuid,
-    record_time: DateTime<Utc>,
-    record_id: i64,
+#[derive(Debug, Clone)]
+pub struct EnteredSpan {
+    pub id: Uuid,
+    pub record_time: DateTime<Utc>,
+    pub record_id: i64,
 }
 
-#[derive(Clone,Deref)]
-struct CreatedSpan {
-    id: Uuid,
+#[derive(Clone, Deref)]
+pub struct CreatedSpan {
+    pub id: Uuid,
     #[deref]
-    span_base_info: Arc<SpanFullInfoBase>,
-    parent_span_t_id: Option<u64>,
-    total_enter_duration: chrono::Duration,
-    enter_span: Option<EnteredSpan>,
-    record_id: i64,
-    record_index: i64,
+    pub span_base_info: Arc<SpanFullInfoBase>,
+    pub total_enter_duration: chrono::Duration,
+    pub enter_span: Option<EnteredSpan>,
+    pub record_id: i64,
+    pub record_index: i64,
     // 存储字段，合并通知字段更新
-    last_record_filed_id: Option<(i64, TracingFields)>,
-    last_repeated_event: Option<(i64, SmolStr, usize)>,
-    sub_span_t_ids: SmallVec<[(u64, Uuid, bool); 8]>,
+    pub last_record_filed_id: Option<(i64, TracingFields)>,
+    // last_repeated_event: Option<(i64, SmolStr, usize)>,
+    pub sub_span_t_ids: SmallVec<[(u64, Uuid, bool); 8]>,
 }
 
-struct RecordWatcher {
+impl Debug for CreatedSpan {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CreatedSpan").finish()
+    }
+}
+
+pub struct RecordWatcher {
     sender: flume::Sender<Arc<TracingTreeRecordDto>>,
     filter: TracingRecordFilter,
 }
@@ -89,7 +96,7 @@ impl Into<TracingRecordDto> for AppRunRecord {
             fields: Arc::new(
                 self.variant
                     .fields_mut()
-                    .map(|n| core::mem::take(n).into_json_map())
+                    .map(|n| mem::take(n).into_json_map())
                     .unwrap_or_default(),
             ),
             span_id_is_stable: self
@@ -116,9 +123,12 @@ pub enum AppRunMsg {
 
 pub enum RunMsg {
     AppRun {
+        app_run_record: AppRunRecord,
         record_sender: flume::Sender<AppRunMsg>,
-        run_info: Arc<AppRunInfo>,
         record_receiver: flume::Receiver<AppRunMsg>,
+    },
+    AppStop {
+        app_run_record: AppRunRecord,
     },
     AddRecordWatcher {
         sender: flume::Sender<Arc<TracingTreeRecordDto>>,
@@ -184,12 +194,14 @@ pub struct TLConfig {
 pub struct RunningAppInfo {
     run_info: Arc<AppRunInfo>,
     record_sender: flume::Sender<AppRunMsg>,
-    task: JoinHandle<()>,
+    task: Option<JoinHandle<()>>,
 }
 
 impl Drop for RunningAppInfo {
     fn drop(&mut self) {
-        self.task.abort()
+        if let Some(task) = self.task.take() {
+            task.abort()
+        }
     }
 }
 
@@ -209,32 +221,173 @@ impl RunningApps {
     }
 
     pub async fn handle_records(&mut self, msg_receiver: flume::Receiver<RunMsg>) {
+        let mut event_service = EventService::default();
         while let Ok(msg) = msg_receiver.recv_async().await {
             match msg {
                 RunMsg::AppRun {
-                    run_info,
+                    mut app_run_record,
                     record_receiver,
                     record_sender,
                 } => {
-                    let mut running_app = RunningApp::new(
-                        self.tracing_service.clone(),
-                        run_info.clone(),
-                        self.config.clone(),
-                    );
-                    let task = tokio::spawn(async move {
-                        running_app.handle_records(record_receiver).await.unwrap();
-                    });
-                    if let Some(_app) = self.running_apps.insert(
-                        run_info.run_id,
-                        RunningAppInfo {
-                            run_info: run_info.clone(),
-                            record_sender,
-                            task,
-                        },
-                    ) {
-                        warn!("app {} already running!", run_info.id);
-                        continue;
+                    let future = async {
+                        let TracingRecordVariant::AppStart {
+                            record_time,
+                            app_info,
+                            name,
+                            fields,
+                            reconnect,
+                            created_spans,
+                        } = &mut app_run_record.variant
+                        else {
+                            unreachable!()
+                        };
+
+                        let app_run_dto = if !*reconnect {
+                            self.tracing_service
+                                .insert_record(
+                                    app_run_record.id,
+                                    app_run_record.record_index,
+                                    name.to_string(),
+                                    record_time.fixed_offset(),
+                                    TracingKind::AppStart.as_str().into(),
+                                    None,
+                                    None,
+                                    None,
+                                    Some(fields.clone().into_json_value()),
+                                    None,
+                                    None,
+                                    None,
+                                    app_info.clone(),
+                                )
+                                .await?;
+                            let _r = self.tracing_service.try_insert_app(app_info.id).await?;
+                            let _r = self
+                                .tracing_service
+                                .try_insert_app_build(app_info.clone(), name.to_string())
+                                .await?;
+                            self.tracing_service
+                                .insert_app_run(
+                                    app_info.clone(),
+                                    fields.clone().into_json_value(),
+                                    record_time.fixed_offset(),
+                                    app_run_record.id as _,
+                                )
+                                .await?
+                        } else {
+                            self.tracing_service
+                                .insert_record(
+                                    RECORD_ID_GENERATOR.next(),
+                                    -1,
+                                    name.to_string(),
+                                    record_time.fixed_offset(),
+                                    TracingKind::Event.as_str().into(),
+                                    Some(proto::Level::Warn),
+                                    None,
+                                    None,
+                                    Some(fields.clone().into_json_value()),
+                                    None,
+                                    None,
+                                    None,
+                                    app_info.clone(),
+                                )
+                                .await?;
+                            self.tracing_service
+                                .find_app_run_by_id(app_info.run_id)
+                                .await?
+                                .with_context(|| {
+                                    format!("not found app run. app_info: {:?}", app_info)
+                                })?
+                                .into()
+                        };
+
+                        let created_spans = mem::take(created_spans);
+                        anyhow::Ok((app_run_record, app_run_dto, created_spans))
+                    };
+                    match future.await {
+                        Ok((app_run_record, app_run_dto, created_spans)) => {
+                            let app_info = app_run_record.variant.app_info().clone();
+                            event_service.clear_disconnected();
+                            event_service
+                                .notify(
+                                    app_run_record,
+                                    Some(TracingTreeRecordVariantDto::AppRun(app_run_dto)),
+                                )
+                                .await;
+
+                            let mut running_app = RunningApp::new(
+                                self.tracing_service.clone(),
+                                app_info.clone(),
+                                self.config.clone(),
+                                created_spans,
+                            );
+
+                            let task = tokio::spawn(async move {
+                                running_app.handle_records(record_receiver).await.unwrap();
+                                println!("app run task finished");
+                            });
+                            if let Some(_app) = self.running_apps.insert(
+                                app_info.run_id,
+                                RunningAppInfo {
+                                    run_info: app_info.clone(),
+                                    record_sender,
+                                    task: Some(task),
+                                },
+                            ) {
+                                warn!("app {} already running!", app_info.id);
+                                continue;
+                            }
+                        }
+                        Err(err) => {
+                            warn!(?err, "Failed to insert app run record");
+                        }
                     }
+                }
+                RunMsg::AppStop { app_run_record } => {
+                    let TracingRecordVariant::AppStop {
+                        record_time,
+                        app_info,
+                        name: _,
+                        exception_end,
+                    } = &app_run_record.variant
+                    else {
+                        unreachable!()
+                    };
+                    let run_id = app_info.run_id;
+
+                    if let Ok(app_run_dto) = self
+                        .tracing_service
+                        .update_app_run_stop_time(
+                            run_id,
+                            record_time.fixed_offset(),
+                            app_run_record.id as _,
+                            exception_end.then(|| true),
+                        )
+                        .await
+                        .inspect_err(|err| {
+                            warn!("Failed to update app run stop time: {}", err);
+                        })
+                    {
+                        event_service.clear_disconnected();
+                        event_service
+                            .notify(
+                                app_run_record,
+                                Some(TracingTreeRecordVariantDto::AppRun(app_run_dto)),
+                            )
+                            .await;
+                    }
+                    let Some(mut running_app) = self.running_apps.remove(&run_id) else {
+                        warn!("app {} not running", run_id);
+                        continue;
+                    };
+                    if let Some(task) = running_app.task.take() {
+                        drop(running_app);
+                        let _ = task.await.inspect_err(|err| {
+                            warn!("app run task error: {}", err);
+                        });
+                    } else {
+                        warn!("app run task not found");
+                    }
+                    GLOBAL_DATA.remove_running_app(run_id);
                 }
                 RunMsg::AddRecordWatcher { sender, filter } => {
                     for (_, app) in self.running_apps.iter_mut() {
@@ -242,15 +395,20 @@ impl RunningApps {
                             if !app_run_ids.is_empty()
                                 && !app_run_ids.contains(&app.run_info.run_id)
                             {
-                                break;
+                                continue;
                             }
                         }
-                        let _r = app.record_sender
-                           .send(AppRunMsg::AddRecordWatcher(RecordWatcher {
-                               sender: sender.clone(),
-                               filter: filter.clone(),
-                           }));
+                        let _r = app
+                            .record_sender
+                            .send(AppRunMsg::AddRecordWatcher(RecordWatcher {
+                                sender: sender.clone(),
+                                filter: filter.clone(),
+                            }))
+                            .inspect_err(|err| {
+                                warn!("Failed to send AddRecordWatcher: {}", err);
+                            });
                     }
+                    event_service.add_record_watcher(sender, Default::default());
                 }
             }
         }
@@ -262,11 +420,7 @@ pub struct RunningApp {
 
     app_info: Arc<AppRunInfo>,
     created_spans: hashbrown::HashMap<u64, CreatedSpan>,
-    last_repeated_event: Option<(u64, SmolStr, usize)>,
-
-    // running_apps: hashbrown::HashMap<Uuid, RunningApp>,
-
-    // buf_records: VecDeque<(TracingRecordVariant, u64)>,
+    // last_repeated_event: Option<(u64, SmolStr, usize)>,
     dto_buf: Vec<(AppRunRecord, Option<TracingTreeRecordVariantDto>)>,
     record_batch_inserter: TracingRecordBatchInserter,
     pub config: Arc<TLConfig>,
@@ -285,7 +439,7 @@ impl RunningApp {
             return Ok(());
         };
 
-        let sub_span_t_ids = core::mem::take(&mut created_span.sub_span_t_ids);
+        let sub_span_t_ids = mem::take(&mut created_span.sub_span_t_ids);
         for (sub_span_t_id, id, _) in sub_span_t_ids.iter().filter(|n| !n.2) {
             set_exception_end_for_span_run(id, batch_inserter, record_time)?;
             self.set_exception_end_for_sub_spans(*sub_span_t_id, batch_inserter, record_time)?;
@@ -323,20 +477,21 @@ enum PreHandleResult {
     Continue,
     Pushed,
 }
-const POSTGRESQL_MAX_BIND_PARAM_COUNT: usize = 32767;
+pub const POSTGRESQL_MAX_BIND_PARAM_COUNT: usize = 32767;
 
 impl RunningApp {
     pub fn new(
         tracing_service: TracingService,
         app_info: Arc<AppRunInfo>,
         config: Arc<TLConfig>,
+        created_spans: hashbrown::HashMap<u64, CreatedSpan>,
     ) -> Self {
         Self {
             config,
             tracing_service,
             app_info,
-            created_spans: Default::default(),
-            last_repeated_event: None,
+            created_spans,
+            // last_repeated_event: None,
             dto_buf: vec![],
             record_batch_inserter: TracingRecordBatchInserter::new(),
         }
@@ -375,6 +530,7 @@ impl RunningApp {
     ) -> PreHandleResult {
         match msg {
             AppRunMsg::Record(record) => {
+                // println!("Record: {:?} \r\n",record);
                 buf.push_back(record);
                 if buf.len() >= max_buf_count + 1 {
                     PreHandleResult::BufFilled
@@ -405,22 +561,25 @@ impl RunningApp {
         let mut batch_inserter = SqlBatchExecutor::default();
 
         let mut event_service = EventService::default();
-        let mut instant;
+        // let mut instant;
 
         loop {
-            instant = Instant::now();
-            {
+            // instant = Instant::now();
+            let (is_disconnected, _) = {
                 let future_1 = async {
                     let mut delay_future =
                         std::pin::pin!(tokio::time::sleep(config.record_max_delay));
+                    let Ok(msg) = record_receiver.recv_async().await else {
+                        return Ok(true);
+                    };
                     match Self::pre_handle_msg(
-                        record_receiver.recv_async().await?,
+                        msg,
                         config.record_max_buf_count,
                         &mut buf_records_1,
                         &mut buf_event_senders,
                     ) {
                         PreHandleResult::BufFilled => {}
-                        PreHandleResult::Continue => return Ok(()),
+                        PreHandleResult::Continue => return Ok(false),
                         PreHandleResult::Pushed => {}
                     }
                     loop {
@@ -429,7 +588,10 @@ impl RunningApp {
                                 break;
                             }
                             msg = record_receiver.recv_async() => {
-                                match Self::pre_handle_msg(msg?,config.record_max_buf_count,&mut buf_records_1,&mut buf_event_senders) {
+                                let Ok(msg) = msg else{
+                                    break;
+                                };
+                                match Self::pre_handle_msg(msg,config.record_max_buf_count,&mut buf_records_1,&mut buf_event_senders) {
                                     PreHandleResult::BufFilled => {
                                         break;
                                     }
@@ -439,7 +601,7 @@ impl RunningApp {
                             }
                         }
                     }
-                    anyhow::Ok(())
+                    anyhow::Ok(false)
                 };
                 let future_2 = async {
                     let batch_inserter = &mut batch_inserter;
@@ -562,11 +724,6 @@ impl RunningApp {
                             })
                             .map_err(|n| anyhow!("{n:?}"))?;
                     }
-                    let records_insert_prepare_duration = instant.elapsed();
-                    instant = Instant::now();
-
-                    let records_insert_execute_duration = instant.elapsed();
-                    instant = Instant::now();
 
                     self.dto_buf.reserve_exact(buf_records_2.len());
                     while let Some(mut record) = buf_records_2.pop_front() {
@@ -578,13 +735,12 @@ impl RunningApp {
                                     info.span_info.t_id,
                                     CreatedSpan {
                                         id: Uuid::new_v4(),
-                                        parent_span_t_id: info.running_span.parent_span_t_id,
                                         total_enter_duration: Default::default(),
                                         enter_span: None,
                                         record_id: record.record_index,
                                         record_index: record.record_index,
                                         last_record_filed_id: None,
-                                        last_repeated_event: None,
+                                        // last_repeated_event: None,
                                         span_base_info: info.base.clone(),
                                         sub_span_t_ids: Default::default(),
                                     },
@@ -599,7 +755,10 @@ impl RunningApp {
                                     continue;
                                 };
                                 let created_span_id = created_span.id;
-                                if let Some(parent_span_t_id) = created_span.parent_span_t_id {
+
+                                if let Some(parent_span_t_id) =
+                                    created_span.running_span.parent_span_t_id
+                                {
                                     if let Some(created_span) =
                                         self.get_created_span_mut(parent_span_t_id)
                                     {
@@ -608,7 +767,7 @@ impl RunningApp {
                                             created_span_id,
                                             false,
                                         ));
-                                        if created_span.sub_span_t_ids.is_empty()
+                                        /*                                        if created_span.sub_span_t_ids.is_empty()
                                             && created_span.last_repeated_event.is_none()
                                         {
                                             let r = Self::update_to_no_empty_children(
@@ -616,7 +775,7 @@ impl RunningApp {
                                                 created_span,
                                             )?;
                                             self.dto_buf.push(r);
-                                        }
+                                        }*/
                                     }
                                 }
 
@@ -660,7 +819,9 @@ impl RunningApp {
                                 let Some(created_span) = self.remove_created_span(info.t_id) else {
                                     continue;
                                 };
-                                if let Some(parent_span_t_id) = created_span.parent_span_t_id {
+                                if let Some(parent_span_t_id) =
+                                    created_span.running_span.parent_span_t_id
+                                {
                                     if let Some(created_span) =
                                         self.get_created_span_mut(parent_span_t_id)
                                     {
@@ -710,10 +871,8 @@ impl RunningApp {
                                     cur_record_field_count += 1;
                                     match &mut created_span.last_record_filed_id {
                                         None => {
-                                            created_span.last_record_filed_id = Some((
-                                                record.id,
-                                                core::mem::take(&mut info.fields),
-                                            ));
+                                            created_span.last_record_filed_id =
+                                                Some((record.id, mem::take(&mut info.fields)));
                                         }
                                         Some((last_record_filed_id, fields)) => {
                                             *last_record_filed_id = record.id;
@@ -736,16 +895,15 @@ impl RunningApp {
                                         serde_json::to_writer(&mut json_buf, json_fields)?;
                                         let json = String::from_utf8_lossy(json_buf.as_slice());
                                         let quote = "$$";
-                                        let quote  = if json.contains(quote) {
+                                        let quote = if json.contains(quote) {
                                             "$UU21c99cb0-e891-4764-a6c6-8b83a468bff7UU$"
-                                        }else {
+                                        } else {
                                             quote
                                         };
                                         anyhow::Ok(writeln!(
                                             batch_inserter,
                                             r#"update tracing_span_run set fields = fields||{quote}{}{quote}::jsonb where id = '{}';"#,
-                                            json,
-                                            created_span_id,
+                                            json, created_span_id,
                                         )?)
                                     },
                                 );
@@ -844,104 +1002,54 @@ impl RunningApp {
                                 ))
                             }
                             TracingRecordVariant::Event { .. } => None,
-                            TracingRecordVariant::AppStart {
-                                app_info,
-                                record_time,
-                                name,
-                                fields,
-                            } => {
-                                let _r = self.tracing_service.try_insert_app(app_info.id).await?;
-                                let _r = self
-                                    .tracing_service
-                                    .try_insert_app_build(app_info.clone(), name.to_string())
-                                    .await?;
-                                let app_run_dto = self
-                                    .tracing_service
-                                    .insert_app_run(
-                                        app_info.clone(),
-                                        fields.clone().into_json_value(),
-                                        record_time.fixed_offset(),
-                                        record.id as _,
-                                    )
-                                    .await?;
-                                Some(TracingTreeRecordVariantDto::AppRun(app_run_dto))
+                            TracingRecordVariant::AppStart { .. } => {
+                                return Err(anyhow!("unreachable AppStart"))
                             }
-                            TracingRecordVariant::AppStop {
-                                app_info,
-                                record_time,
-                                exception_end,
-                                ..
-                            } => {
-                                let created_spans = self.created_spans.clone();
-                                for (t_id, created_span) in created_spans {
-                                    set_exception_end_for_span_run(
-                                        &created_span.id,
-                                        batch_inserter,
-                                        record_time.clone(),
-                                    )?;
-                                    self.set_exception_end_for_sub_spans(
-                                        t_id,
-                                        batch_inserter,
-                                        record_time.clone(),
-                                    )?;
-                                }
-                                let app_run_dto = self
-                                    .tracing_service
-                                    .update_app_run_stop_time(
-                                        app_info.run_id,
-                                        record_time.fixed_offset(),
-                                        record.id as _,
-                                        exception_end.then(|| true),
-                                    )
-                                    .await?;
-                                Some(TracingTreeRecordVariantDto::AppRun(app_run_dto))
+                            TracingRecordVariant::AppStop { .. } => {
+                                return Err(anyhow!("unreachable AppStop"))
                             }
                         };
                         self.dto_buf.push((record, r));
                     }
 
-                    let other_update_prepare_duration = instant.elapsed();
-                    instant = Instant::now();
-
-                    let other_update_execute_duration = instant.elapsed();
-                    instant = Instant::now();
-
-                    event_service.clear();
-                    let buffed_field_record_count = cur_record_field_count;
+                    event_service.clear_disconnected();
+                    // let buffed_field_record_count = cur_record_field_count;
                     cur_record_field_count = 0;
-                    let notify_count = self.dto_buf.len();
+                    // let notify_count = self.dto_buf.len();
 
-                    let mut dto_buf = core::mem::take(&mut self.dto_buf);
+                    let mut dto_buf = mem::take(&mut self.dto_buf);
                     try_join!(
                         self.record_batch_inserter.execute(&self.tracing_service.dc),
                         batch_inserter.execute(&self.tracing_service.dc),
                         async {
                             for (record, dto) in dto_buf.drain(..) {
-                                // writeln!(&mut string,"notify: {record:#?}, record_id: {record_id:?}");
                                 event_service.notify(record, dto).await;
                             }
                             Ok(())
                         }
                     )?;
 
-                    core::mem::swap(&mut self.dto_buf, &mut dto_buf);
+                    mem::swap(&mut self.dto_buf, &mut dto_buf);
                     anyhow::Ok(())
                 };
 
-                try_join!(future_1, future_2)?;
-            }
-            core::mem::swap(&mut buf_records_1, &mut buf_records_2);
-            assert_eq!(buf_records_1.len(),0);
+                try_join!(future_1, future_2)?
+            };
+            mem::swap(&mut buf_records_1, &mut buf_records_2);
+            assert_eq!(buf_records_1.len(), 0);
 
             for x in buf_event_senders.drain(..) {
                 event_service.add_record_watcher(x.sender, x.filter);
+            }
+            if is_disconnected {
+                break;
             }
 
             // let buf_prepare_duration = instant.elapsed();
             // instant = Instant::now();
 
             // println!("{}",string);
-            let notify_duration = instant.elapsed();
+            // let notify_duration = instant.elapsed();
 
             // info!(
             //     buffed_record_count,
@@ -956,9 +1064,24 @@ impl RunningApp {
             //     "buf apply and notified"
             // );
         }
+
+        let created_spans = self.created_spans.clone();
+        let record_time = GLOBAL_DATA
+            .get_node_now_timestamp_nanos(self.app_info.run_id)
+            .map(|node_now| DateTime::from_timestamp_nanos(node_now))
+            .unwrap_or_else(|| Utc::now());
+        for (t_id, created_span) in created_spans {
+            set_exception_end_for_span_run(
+                &created_span.id,
+                &mut batch_inserter,
+                record_time.clone(),
+            )?;
+            self.set_exception_end_for_sub_spans(t_id, &mut batch_inserter, record_time.clone())?;
+        }
+        Ok(())
     }
 
-    fn update_to_no_empty_children(
+    /*    fn update_to_no_empty_children(
         batch_inserter: &mut SqlBatchExecutor,
         created_span: &mut CreatedSpan,
     ) -> Result<(AppRunRecord, Option<TracingTreeRecordVariantDto>), std::fmt::Error> {
@@ -970,9 +1093,7 @@ impl RunningApp {
         writeln!(
             batch_inserter,
             r#"update tracing_record set fields = fields||'{{"{}": {}}}'::jsonb where id = '{}';"#,
-            FIELD_DATA_EMPTY_CHILDREN,
-            false,
-            created_span.record_id,
+            FIELD_DATA_EMPTY_CHILDREN, false, created_span.record_id,
         )?;
         Ok((
             AppRunRecord {
@@ -982,7 +1103,7 @@ impl RunningApp {
             },
             None,
         ))
-    }
+    }*/
 }
 
 #[inline(always)]

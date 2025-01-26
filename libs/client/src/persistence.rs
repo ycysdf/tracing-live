@@ -1,4 +1,3 @@
-use crate::TLReconnectAndPersistenceSetting;
 use binrw::io::TakeSeekExt;
 use binrw::{binrw, BinRead, BinResult, BinWrite};
 use bytes::{BufMut, Bytes, BytesMut};
@@ -110,7 +109,7 @@ impl Default for TLBlockHeader {
 
 pub const RECORD_BLOCK_SIZE: usize = 1024;
 pub const FORMAT_MAGIC: &'static [u8] = b"TLRM";
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[binrw]
 #[brw(little, magic = b"TLRM")]
 pub struct TLRecordsMetadata {
@@ -250,28 +249,6 @@ impl RecordsPersistenceToFile {
         } else {
             self.init_exist(instance_id, stream)
         }
-    }
-
-    pub fn debug(
-        &mut self,
-        mut stream: impl RWS,
-        records_metadata: &TLRecordsMetadata,
-    ) -> BinResult<()> {
-        if records_metadata.current_instance_footer.span.is_none() {
-            return Ok(());
-        }
-        let instant = Instant::now();
-        let instances = self.read_instances(&mut stream)?;
-        let mut c = 0;
-        for instance in instances.iter().filter(|n| n.span.size != 0) {
-            self.iter_from(&mut stream, records_metadata.clone(), &instance, 0, |msg| {
-                c += 1;
-            })?;
-        }
-
-        // println!("debug elapsed: {:?}. count: {c}", instant.elapsed());
-
-        Ok(())
     }
 
     pub fn blocks_from(
@@ -678,7 +655,7 @@ thread_local! {
 
 pub struct EncodeBytesSubscriber {
     // pub total_size: AtomicU64,
-    pub sender: flume::Sender<(Bytes, u64)>,
+    pub sender: flume::Sender<Option<(Bytes, u64)>>,
 }
 
 /*impl EncodeBytesSubscriber {
@@ -853,7 +830,7 @@ impl TracingLiveMsgSubscriber for EncodeBytesSubscriber {
             // println!("total_size: {total_size:?}");
             if let Err(err) = self
                 .sender
-                .send((buf.split().freeze(), msg.record_index()))
+                .send(Some((buf.split().freeze(), msg.record_index())))
             {
                 eprintln!("send error: {err}. msg: {msg:?}");
             }

@@ -242,8 +242,8 @@ async fn test_saved(container: Span) {
 
 #[instrument]
 async fn many_event() {
-    for i in 0..1024 {
-        info!("event {}", i);
-        tokio::time::sleep(Duration::from_micros(10)).await;
+    for _ in 0..1024 {
+        info!("event");
+        tokio::time::sleep(Duration::from_secs(1)).await;
     }
 }

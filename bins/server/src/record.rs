@@ -3,7 +3,7 @@ use crate::grpc_service::{
     RunningSpan, SpanFullInfo, SpanInfo, TracingFields, TracingServiceImpl, FIELD_DATA_SPAN_T_ID,
 };
 use crate::tracing_service::{
-    BigInt, TracingLevel, TracingRecordDto, TracingRecordFieldFilter, TracingRecordFilter,
+    TracingLevel, TracingRecordDto, TracingRecordFieldFilter, TracingRecordFilter,
     TracingRecordScene, TracingTreeRecordDto,
 };
 use chrono::{DateTime, Local, Utc};
@@ -18,6 +18,7 @@ use std::sync::Arc;
 use tracing_lv_core::proto::{field_value, FieldValue, PosInfo};
 use utoipa::ToSchema;
 use uuid::Uuid;
+use crate::running_app::CreatedSpan;
 
 pub type SpanId = Uuid;
 
@@ -113,6 +114,8 @@ pub enum TracingRecordVariant {
         app_info: Arc<AppRunInfo>,
         name: SmolStr,
         fields: TracingFields,
+        reconnect: bool,
+        created_spans: hashbrown::HashMap<u64,CreatedSpan>
     },
     AppStop {
         record_time: DateTime<Utc>,
@@ -256,7 +259,9 @@ impl TracingRecordVariant {
                     return false;
                 }
             } else {
-                return false;
+                if !parent_span_t_ids.iter().all(|n| *n == 0) {
+                    return false;
+                }
             }
         }
         if let Some(kinds) = &filter.kinds {

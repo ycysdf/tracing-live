@@ -59,6 +59,7 @@ bon = "3"
 #utoipa-scalar = { version = "0.2", features = ["axum"] }
 
 shadow-rs = "0.37"
+log = "0.4.22"
 
 [build-dependencies]
 shadow-rs = "0.37"

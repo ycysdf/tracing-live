@@ -2,10 +2,10 @@
 #![feature(unboxed_closures)]
 #![allow(unused_imports)]
 
-use crate::tracing_service::BigInt;
 use shadow_rs::shadow;
 use std::sync::atomic::{AtomicI64, AtomicU64};
 use std::{sync, u64};
+use uuid::{uuid, Uuid};
 
 mod dyn_query;
 pub mod event_service;
@@ -41,3 +41,6 @@ impl RecordIdGenerator {
 }
 
 pub static RECORD_ID_GENERATOR: RecordIdGenerator = RecordIdGenerator(AtomicI64::new(1));
+
+
+pub const SELF_APP_ID: Uuid = uuid!("51E5297E-949F-DABC-76B1-F34E5FCEA32F");

@@ -3720,6 +3720,7 @@ dependencies = [
  "futures-util",
  "hashbrown 0.15.2",
  "http-body-util",
+ "log",
  "lru",
  "mime_guess",
  "rust-embed",

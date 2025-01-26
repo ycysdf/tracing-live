@@ -234,8 +234,7 @@ pub mod tracing_service_client {
         clippy::wildcard_imports,
         clippy::let_unit_value,
     )]
-    use alloc::format;
-use tonic::codegen::*;
+    use tonic::codegen::*;
     use tonic::codegen::http::Uri;
     #[derive(Debug, Clone)]
     pub struct TracingServiceClient<T> {
@@ -329,7 +328,7 @@ use tonic::codegen::*;
                 .await
                 .map_err(|e| {
                     tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
+                        alloc::format!("Service was not ready: {}", e.into()),
                     )
                 })?;
             let codec = tonic::codec::ProstCodec::default();
@@ -350,7 +349,7 @@ use tonic::codegen::*;
                 .await
                 .map_err(|e| {
                     tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
+                        alloc::format!("Service was not ready: {}", e.into()),
                     )
                 })?;
             let codec = tonic::codec::ProstCodec::default();
@@ -374,7 +373,7 @@ pub mod tracing_service_server {
         clippy::wildcard_imports,
         clippy::let_unit_value,
     )]
-    use std::boxed::Box;
+    use alloc::boxed::Box;
 use tonic::codegen::*;
     /// Generated trait containing gRPC methods that should be implemented for use with TracingServiceServer.
     #[async_trait]

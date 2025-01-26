@@ -2,7 +2,7 @@ use crate::record::TracingKind;
 use crate::running_app::RunMsg;
 use crate::tracing_service::TracingTreeRecordDto;
 use crate::tracing_service::{
-    AppLatestInfoDto, AppNodeFilter, AppNodeRunDto, AppRunDto, BigInt, CursorInfo,
+    AppLatestInfoDto, AppNodeFilter, AppNodeRunDto, AppRunDto, CursorInfo,
     TracingRecordDto, TracingRecordFieldFilter, TracingRecordFilter, TracingService,
     TracingSpanRunDto,
 };
@@ -383,7 +383,7 @@ mod records {
     use super::{Query, Result};
     use crate::tracing_service::QueryTracingRecordByIds;
     use crate::tracing_service::{
-        BigInt, TracingRecordDto, TracingRecordFilter, TracingService, TracingTreeRecordDto,
+        TracingRecordDto, TracingRecordFilter, TracingService, TracingTreeRecordDto,
     };
     use axum::extract::State;
     use axum::Json;

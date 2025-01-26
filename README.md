@@ -2,7 +2,6 @@
 [![Crates.io](https://img.shields.io/crates/v/tracing-live.svg)](https://crates.io/crates/tracing-lv)
 [![Docs](https://docs.rs/tracing-live/badge.svg)](https://docs.rs/tracing-lv)
 
-
 # Tracing Live
 
 > In Progress!. 项目正在进行中
@@ -17,14 +16,17 @@
 - 结构化数据
 - 多节点、多 App 实例
 - `AsyncRead`、`AsyncWrite` 集成
+- 持久化到磁盘 与 Server 重连
 
 ## Start Server
 
 ```shell
 docker run --name timescaledb -d -p 5432:5432 -e POSTGRES_PASSWORD=<You Posgtres Password> -v <Your Posgtres Data Dir>:/var/lib/postgresql/data timescale/timescaledb:latest-pg16
 
-docker run --name tracing-live-server -d -p 443:443 -p 8080:8080 -e DATABASE_URL="postgresql://postgres:123456@host.docker.internal:5432/postgres" --add-host=host.docker.internal:host-gateway ycysdf/tracing-live-server
+docker run --name tracing-live-server -d -p 443:443 -p 8080:8080 -e DATABASE_URL="postgresql://postgres:123456@host.docker.internal:5432/tracing" --add-host=host.docker.internal:host-gateway ycysdf/tracing-live-server
 ```
+
+web server address：https://localhost
 
 ## Setup Client
 
@@ -39,7 +41,7 @@ uuid = { version = "1", features = ["v4"] }
 anyhow = "1"
 ```
 
-Simple Sample: 
+Simple Sample:
 
 ```rust
 use tracing::{info, info_span, warn};
@@ -47,36 +49,36 @@ use tracing_lv::client::{TLAppInfo, TLSubscriberExt};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::registry()
-        .tracing_lv_init(
-            "http://localhost:8080",
-            TLAppInfo::new(
-                uuid::uuid!("f7570e13-d331-40f7-8d04-e87530308c05"),
-                "Simple App",
-                "1.0",
-            )
+   tracing_subscriber::registry()
+      .tracing_lv_init(
+         "http://localhost:8080",
+         TLAppInfo::new(
+            uuid::uuid!("f7570e13-d331-40f7-8d04-e87530308c05"),
+            "Simple App",
+            "1.0",
+         )
             .node_id("TestNode")
             .with_data("node_name", "TestNode")
             .with_data("brief", "IP")
             .with_data("second_name", "Cur Os Name"),
-            app_main,
-        )
-        .await?
+         app_main,
+      )
+      .await?
 }
 
 async fn app_main() -> anyhow::Result<()> {
-    info!("Hello, world!");
-    info_span!("Test Span").in_scope(|| {
-        info!("Info Event!");
-        warn!("Warn Event!")
-    });
-    info!(a = 123, b = "String", "start do");
-    for _ in 0..10 {
-        info!("do something");
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    }
-    info!("App End!");
-    Ok(())
+   info!("Hello, world!");
+   info_span!("Test Span").in_scope(|| {
+      info!("Info Event!");
+      warn!("Warn Event!")
+   });
+   info!(a = 123, b = "String", "start do");
+   for _ in 0..10 {
+      info!("do something");
+      tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+   }
+   info!("App End!");
+   Ok(())
 }
 ```
 
@@ -101,8 +103,6 @@ async fn app_main() -> anyhow::Result<()> {
 [//]: # (- Notify)
 
 [//]: # (- ...)
-
-
 
 ## License
 

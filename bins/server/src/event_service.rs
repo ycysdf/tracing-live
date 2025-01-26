@@ -4,7 +4,7 @@ use tracing::error;
 use crate::record::TracingRecordVariant;
 use crate::running_app::AppRunRecord;
 use crate::tracing_service::{
-   BigInt, TracingRecordFilter, TracingSpanRunDto, TracingTreeRecordVariantDto,
+   TracingRecordFilter, TracingSpanRunDto, TracingTreeRecordVariantDto,
 };
 use crate::tracing_service::{TracingRecordDto, TracingTreeRecordDto};
 
@@ -21,7 +21,7 @@ impl EventService {
     pub fn need_notify(&self) -> bool {
         !self.record_event_senders.is_empty()
     }
-    pub fn clear(&mut self) {
+    pub fn clear_disconnected(&mut self) {
         self.record_event_senders.retain(|n| !n.0.is_disconnected());
     }
     #[inline]
@@ -36,6 +36,7 @@ impl EventService {
         let dto = item.into();
         let tree_record_dto = Arc::new(TracingTreeRecordDto::new(dto, variant_dto));
         for sender in self.record_event_senders.iter().filter(|n| n.2) {
+            // println!("notify: {tree_record_dto:#?}");
             let _ = sender.0.send_async(tree_record_dto.clone()).await.inspect_err(|err| {
                 error!("Failed to notify tracing of events: {}", err);
             });

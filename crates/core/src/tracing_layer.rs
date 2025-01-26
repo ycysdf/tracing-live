@@ -176,6 +176,12 @@ pub trait TracingLiveMsgSubscriber: Send + Sync + 'static {
     fn on_msg(&self, msg: TLMsg);
 }
 
+impl TracingLiveMsgSubscriber for alloc::boxed::Box<dyn TracingLiveMsgSubscriber> {
+    fn on_msg(&self, msg: TLMsg) {
+        (**self).on_msg(msg)
+    }
+}
+
 impl<T, F> TracingLiveMsgSubscriber for (T, F)
 where
     T: TracingLiveMsgSubscriber,
