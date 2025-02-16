@@ -4,19 +4,18 @@
 
 # Tracing Live
 
-> In Progress!. 项目正在进行中
+> In Progress!.
 
-基于 Tracing，轻松的实时追踪你的 Rust 程序！
+Tracing your Rust program in real time. based on Tracing
 
 ![](/assets/show.png)
 
-## 特征
+## Features
 
-- 实时 Span、Event、Field 追踪
-- 结构化数据
-- 多节点、多 App 实例
-- `AsyncRead`、`AsyncWrite` 集成
-- 持久化到磁盘 与 Server 重连
+- Real-time Span, Event, and Field tracking
+- Structured relational data
+- Multi-node, multi-app instances
+- `AsyncRead`、`AsyncWrite` integrated
 
 ## Start Server
 
@@ -33,7 +32,7 @@ web server address：https://localhost
 dependencies:
 
 ```toml
-tracing-lv = { version = "0.0.1-beta.3" }
+tracing-lv = { version = "0.0.1" }
 tracing = "0.1"
 tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -83,7 +82,7 @@ async fn app_main() -> anyhow::Result<()> {
 }
 ```
 
-更多用例请看 examples
+For more examples, see `examples`
 
 [//]: # ()
 

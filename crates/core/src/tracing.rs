@@ -373,8 +373,7 @@ pub mod tracing_service_server {
         clippy::wildcard_imports,
         clippy::let_unit_value,
     )]
-    use alloc::boxed::Box;
-use tonic::codegen::*;
+    use tonic::codegen::*;
     /// Generated trait containing gRPC methods that should be implemented for use with TracingServiceServer.
     #[async_trait]
     pub trait TracingService: std::marker::Send + std::marker::Sync + 'static {
@@ -490,7 +489,7 @@ use tonic::codegen::*;
                             let fut = async move {
                                 <T as TracingService>::app_run(&inner, request).await
                             };
-                            Box::pin(fut)
+                            alloc::boxed::Box::pin(fut)
                         }
                     }
                     let accept_compression_encodings = self.accept_compression_encodings;
@@ -513,7 +512,7 @@ use tonic::codegen::*;
                         let res = grpc.streaming(method, req).await;
                         Ok(res)
                     };
-                    Box::pin(fut)
+                    alloc::boxed::Box::pin(fut)
                 }
                 "/tracing.TracingService/Ping" => {
                     #[allow(non_camel_case_types)]
@@ -533,7 +532,7 @@ use tonic::codegen::*;
                             let fut = async move {
                                 <T as TracingService>::ping(&inner, request).await
                             };
-                            Box::pin(fut)
+                            alloc::boxed::Box::pin(fut)
                         }
                     }
                     let accept_compression_encodings = self.accept_compression_encodings;
@@ -556,10 +555,10 @@ use tonic::codegen::*;
                         let res = grpc.unary(method, req).await;
                         Ok(res)
                     };
-                    Box::pin(fut)
+                    alloc::boxed::Box::pin(fut)
                 }
                 _ => {
-                    Box::pin(async move {
+                    alloc::boxed::Box::pin(async move {
                         let mut response = http::Response::new(empty_body());
                         let headers = response.headers_mut();
                         headers

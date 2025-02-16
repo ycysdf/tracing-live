@@ -14,7 +14,7 @@ mime_guess = "2"
 bitflags = "2"
 tokio = { version = "1", features = ["rt-multi-thread"] }
 tokio-util = { version = "0.7", features = ["time"] }
-tracing-lv-core = { path = "../../crates/core", features = ["server","std"], version = "0.0.1-beta.3" }
+tracing-lv-core = { path = "../../crates/core", features = ["server","std"], version = "0.0.1" }
 axum = { version = "0.7", features = ["http2", "json", "form", "multipart", "query", "tracing", "tokio", "tower-log", "matched-path"], default-features = false }
 axum-server = { version = "0.7", features = ["tls-rustls-no-provider"] }
 tonic = { version = "0.12", features = ["server", "zstd"] }
