@@ -1,8 +1,5 @@
 import {A, RouteSectionProps, useLocation, useNavigate, useParams} from "@solidjs/router";
-import {Select, SelectContent, SelectItem, SelectTrigger, SelectValue} from "~/components/ui/select";
-import {getApps} from "~/cache";
 import {createResource, createSignal, For, JSX, Show, Suspense} from "solid-js";
-import {AppLatestInfoDto} from "~/openapi";
 import {Link} from "@kobalte/core/link";
 import {
   ArrowLeftFromLine,
@@ -12,7 +9,7 @@ import {
   Kanban,
   LayoutGrid,
   ListTree,
-  Logs,
+  Logs, Monitor,
   Settings
 } from "lucide-solid";
 import {makePersisted} from "@solid-primitives/storage";
@@ -78,8 +75,8 @@ export function Nav() {
     {
       name: t("node"),
       url: `node`,
-      icon: <LayoutGrid size={16} strokeWidth="1"/>,
-      activeIcon: <LayoutGrid size={16} strokeWidth="2"/>
+      icon: <Monitor size={16} strokeWidth="1"/>,
+      activeIcon: <Monitor size={16} strokeWidth="2"/>
     },
     {
       name: t("app"),

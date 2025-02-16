@@ -72,7 +72,7 @@ export interface AppNodeRunDto {
      * @type {number}
      * @memberof AppNodeRunDto
      */
-    stopRecordId?: number;
+    stopRecordId?: number | null;
     /**
      * 
      * @type {Date}

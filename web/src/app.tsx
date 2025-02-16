@@ -11,7 +11,7 @@ export function App() {
     <HashRouter root={n => <Suspense fallback={<LoadingPanel/>}>{n.children}</Suspense>}>
       <Route component={AppLayout}>
         <Route path="/" component={() => {
-          useNavigate()("index")
+          useNavigate()("trace")
           return <></>
         }}/>
         <Route path="/index" component={AppOverview}/>

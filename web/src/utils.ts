@@ -1,52 +1,6 @@
-/* eslint-disable no-unused-vars */
-import {Accessor, createMemo, createResource, createSignal, onCleanup, onMount, startTransition} from "solid-js";
-import qs from "qs";
-import {BASE_URL, RECORD_FIELDS} from "~/consts";
+import {Accessor, createSignal, startTransition} from "solid-js";
+import {RECORD_FIELDS} from "~/consts";
 import {TracingRecordDto} from "~/openapi";
-
-export interface ListWithEventSourceOption<T> {
-  fetchFirst: any,
-
-  params(arg: T): any,
-
-  parse(json: string): T,
-
-  path: string
-}
-
-
-export function useListWithEventSource<T>({
-                                            fetchFirst,
-                                            params,
-                                            path,
-                                            parse
-                                          }: ListWithEventSourceOption<T>): Accessor<T[]> {
-
-  const [firstData, _] = createResource(() => fetchFirst(), {
-    initialValue: []
-  });
-  const [afterData, setAfterData] = createSignal<T[]>();
-
-  let curData = createMemo(() => {
-    return [...(afterData() ?? []), ...firstData()]
-  });
-
-  onMount(() => {
-    let r = firstData();
-    let params_value = params(r.length > 0 ? r[r.length - 1] : null);
-    let params_string = Object.keys(params_value).length > 0 ? `?${qs.stringify(params_value)}` : '';
-    const eventSource = new EventSource(`${BASE_URL}/${path}${params_string}`);
-    eventSource.onmessage = (event) => {
-      let data: T = parse(event.data);
-      setAfterData(n => [data, ...(n ?? [])])
-    };
-
-    onCleanup(() => {
-      eventSource.close();
-    });
-  });
-  return curData
-}
 
 export function useIsolateTransition(): [Accessor<boolean>, (fn: () => void) => Promise<void>] {
   let [pending, setPending] = createSignal<boolean>();

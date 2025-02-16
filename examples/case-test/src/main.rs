@@ -85,10 +85,10 @@ async fn app_main() -> anyhow::Result<()> {
     let _ = with_result_and_err1();
     let _ = with_result_and_err2();
 
-    test_auto_expand().await;
+    // test_auto_expand().await;
 
-    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-    test_empty_children().await;
+    // tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    // test_empty_children().await;
 
     tokio::spawn(
         async move {
@@ -127,7 +127,8 @@ async fn app_main() -> anyhow::Result<()> {
 
     info!("{}", "Long Event.".repeat(1024));
 
-    many_event();
+    many_event().await;
+    info!("End");
     Ok(())
 }
 
@@ -216,7 +217,7 @@ async fn test_saved(container: Span) {
             async move {
                 async move {
                     info!(num, "do something start");
-                    tokio::time::sleep(tokio::time::Duration::from_secs(1))
+                    tokio::time::sleep(tokio::time::Duration::from_millis(1))
                         .instrument(info_span!("do something"))
                         .await;
                     info!("do something end");
@@ -231,17 +232,18 @@ async fn test_saved(container: Span) {
         .await;
 
         info!("Other EVENT1");
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        // tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
         info!("Other EVENT2");
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        // tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
         info!("Other EVENT3");
     }
     info!("test_saved end ");
 }
 
 #[instrument]
-fn many_event() {
-    for i in 0..1024 * 2 {
-        info!("event {}", i);
+async fn many_event() {
+    for _ in 0..1024 {
+        info!("event");
+        tokio::time::sleep(Duration::from_secs(1)).await;
     }
 }

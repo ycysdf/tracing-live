@@ -16,21 +16,6 @@ pub struct Model {
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-pub enum Relation {
-    #[sea_orm(
-        belongs_to = "super::tracing_span_run::Entity",
-        from = "Column::SpanRunId",
-        to = "super::tracing_span_run::Column::Id",
-        on_update = "NoAction",
-        on_delete = "NoAction"
-    )]
-    TracingSpanRun,
-}
-
-impl Related<super::tracing_span_run::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::TracingSpanRun.def()
-    }
-}
+pub enum Relation {}
 
 impl ActiveModelBehavior for ActiveModel {}

@@ -32,8 +32,17 @@ enum Level {
   ERROR = 4;
 }
 
-message TracingRecordResult {}
-message Ping {}
+message AppReconnectReply{
+  uint64 last_record_index = 1;
+}
+
+message AppRunReplay {
+  oneof Variant {
+    AppReconnectReply reconnect_reply = 1;
+  }
+  int64 send_time = 20;
+}
+message PingParam {}
 message PingResult {}
 
 
@@ -89,6 +98,7 @@ message AppStart {
   string version = 6;
   map<string, FieldValue> data = 8;
   double rtt = 9;
+  bool reconnect = 10;
 }
 message AppStop {
 }
@@ -104,12 +114,13 @@ message RecordParam {
     Event event = 7;
     AppStop app_stop = 8;
   }
-  int64 send_time = 30;
+  int64 send_time = 20;
+  uint64 record_index = 21;
 }
 
 service TracingService {
-  rpc app_run(stream RecordParam) returns (TracingRecordResult) {}
-  rpc ping(Ping) returns (PingResult) {}
+  rpc AppRun(stream RecordParam) returns (stream AppRunReplay) {}
+  rpc Ping(PingParam) returns (PingResult) {}
   //  rpc span_create(SpanCrateParam) returns (TracingRecordResult) {}
   //  rpc span_enter(SpanEnterParam) returns (TracingRecordResult) {}
   //  rpc span_leave(SpanLeaveParam) returns (TracingRecordResult) {}

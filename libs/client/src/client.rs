@@ -1,32 +1,34 @@
-use bytes::{BufMut, Bytes, BytesMut};
+use crate::reconnect_and_persistence::{
+    reconnect_and_persistence, TLReconnectAndPersistenceSetting,
+};
+use bytes::Bytes;
 use chrono::Utc;
+use futures_util::{FutureExt, SinkExt, StreamExt};
 use hyper::Uri;
 use serde::{Deserialize, Serialize};
-use std::cell::RefCell;
 use std::future::Future;
-use std::io::SeekFrom;
-use std::pin::Pin;
+use std::io::Read;
 use std::task::{Context, Poll};
 use std::time::Duration;
-use tokio::io::{AsyncRead, AsyncSeek, AsyncSeekExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncWrite};
 use tokio::task::yield_now;
 use tokio::time::Instant;
-use tonic::codegen::{CompressionEncoding, Service, StdError};
+use tonic::codec::CompressionEncoding;
+use tonic::codegen::{Service, StdError};
 use tonic::transport::{Channel, Endpoint, Error};
 use tracing::instrument::{WithDispatch, WithSubscriber};
 use tracing::subscriber::NoSubscriber;
-use tracing::{error, warn};
 use tracing_core::Dispatch;
 use tracing_lv_core::proto::tracing_service_client::TracingServiceClient;
-use tracing_lv_core::proto::{record_param, AppStop, Ping, RecordParam, TracingRecordResult};
-use tracing_lv_core::{MsgReceiverSubscriber, TLAppInfo, TLLayer};
-use tracing_lv_core::{TLAppInfoExt, TLMsg};
+use tracing_lv_core::proto::{record_param, AppStop, PingParam, RecordParam};
+use tracing_lv_core::{MsgReceiverSubscriber, TLAppInfoExt};
+use tracing_lv_core::{TLAppInfo, TLLayer, TracingLiveMsgSubscriber};
 use tracing_subscriber::layer::{Layered, SubscriberExt};
 use tracing_subscriber::registry::LookupSpan;
 use uuid::Uuid;
 
-struct NoSubscriberService<T>(T);
-struct NoSubscriberExecutor;
+pub struct NoSubscriberService<T>(T);
+pub struct NoSubscriberExecutor;
 
 impl<F> hyper::rt::Executor<F> for NoSubscriberExecutor
 where
@@ -68,6 +70,7 @@ impl TLGuard {
 
         let _ = self.msg_sender.send(RecordParam {
             send_time: Utc::now().timestamp_nanos_opt().unwrap(),
+            record_index: 0,
             variant: Some(record_param::Variant::AppStop(AppStop {})),
         });
     }
@@ -79,6 +82,7 @@ impl Drop for TLGuard {
             // TODO:
             let _ = self.msg_sender.send(RecordParam {
                 send_time: Utc::now().timestamp_nanos_opt().unwrap(),
+                record_index: 0,
                 variant: Some(record_param::Variant::AppStop(AppStop {})),
             });
         }
@@ -87,7 +91,7 @@ impl Drop for TLGuard {
 
 pub async fn default_connect(
     endpoint: impl TryInto<Endpoint, Error: Into<StdError>>,
-) -> Result<Channel, tonic::transport::Error> {
+) -> Result<Channel, Error> {
     Endpoint::new(endpoint)?
         .executor(NoSubscriberExecutor)
         // .tcp_nodelay(false)
@@ -99,41 +103,41 @@ pub async fn default_connect(
 }
 
 pub trait TonicTryConnect {
-    async fn try_connect(self) -> Result<Channel, tonic::transport::Error>;
+    async fn try_connect(self) -> Result<Channel, Error>;
 }
 
 impl TonicTryConnect for String {
-    async fn try_connect(self) -> Result<Channel, tonic::transport::Error> {
+    async fn try_connect(self) -> Result<Channel, Error> {
         default_connect(self).await
     }
 }
 impl TonicTryConnect for &'static str {
-    async fn try_connect(self) -> Result<Channel, tonic::transport::Error> {
+    async fn try_connect(self) -> Result<Channel, Error> {
         default_connect(self).await
     }
 }
 impl TonicTryConnect for Bytes {
-    async fn try_connect(self) -> Result<Channel, tonic::transport::Error> {
+    async fn try_connect(self) -> Result<Channel, Error> {
         default_connect(self).await
     }
 }
 impl TonicTryConnect for Uri {
-    async fn try_connect(self) -> Result<Channel, tonic::transport::Error> {
+    async fn try_connect(self) -> Result<Channel, Error> {
         let endpoint: Endpoint = self.into();
         default_connect(endpoint).await
     }
 }
 impl TonicTryConnect for Channel {
-    async fn try_connect(self) -> Result<Channel, tonic::transport::Error> {
+    async fn try_connect(self) -> Result<Channel, Error> {
         Ok(self)
     }
 }
 impl<F, FO> TonicTryConnect for F
 where
-    FO: Future<Output = Result<Channel, tonic::transport::Error>>,
+    FO: Future<Output = Result<Channel, Error>>,
     F: FnOnce() -> FO,
 {
-    async fn try_connect(self) -> Result<Channel, tonic::transport::Error> {
+    async fn try_connect(self) -> Result<Channel, Error> {
         self().await
     }
 }
@@ -143,7 +147,7 @@ where
     T: TryInto<Endpoint>,
     T::Error: Into<StdError>,
 {
-    async fn try_connect(self) -> Result<Channel, tonic::transport::Error> {
+    async fn try_connect(self) -> Result<Channel, Error> {
         let mut prev_err = None;
         for endpoint in self.into_iter() {
             match default_connect(endpoint).await {
@@ -165,41 +169,6 @@ pub trait AsyncWriteWithReadAndSeek: AsyncWriteWithSeek + AsyncRead {}
 
 impl<T> AsyncWriteWithReadAndSeek for T where T: AsyncWriteWithSeek + AsyncRead {}
 
-pub struct TLReconnectAndPersistenceSetting {
-    pub metadata_info_writer: Pin<Box<dyn AsyncWriteWithSeek + Send>>,
-    pub metadata_info_cur_len: u64,
-    pub records_writer: Pin<Box<dyn AsyncWriteWithReadAndSeek + Send>>,
-    pub reconnect_interval: Vec<Duration>,
-}
-
-impl TLReconnectAndPersistenceSetting {
-    pub async fn from_file(
-        metadata_info_file: tokio::fs::File,
-        records_file: tokio::fs::File,
-    ) -> Result<Self, std::io::Error> {
-        let metadata_info_cur_len = metadata_info_file.metadata().await?.len();
-        Ok(Self {
-            metadata_info_writer: Box::pin(metadata_info_file),
-            metadata_info_cur_len,
-            records_writer: Box::pin(records_file),
-            reconnect_interval: vec![
-                Duration::from_secs(0),
-                Duration::from_secs(2),
-                Duration::from_secs(4),
-                Duration::from_secs(8),
-                Duration::from_secs(8),
-                Duration::from_secs(8),
-                Duration::from_secs(8),
-                Duration::from_secs(8),
-                Duration::from_secs(32),
-                Duration::from_secs(64),
-                Duration::from_secs(256),
-                Duration::from_secs(1024),
-            ],
-        })
-    }
-}
-
 #[derive(Default)]
 pub struct TLSetting {
     pub reconnect_and_persistence: Option<TLReconnectAndPersistenceSetting>,
@@ -213,13 +182,7 @@ pub trait TLSubscriberExt: Sized {
         setting: TLSetting,
     ) -> Result<
         (
-            Layered<
-                TLLayer<(
-                    MsgReceiverSubscriber,
-                    Option<Box<dyn Fn(&TLMsg) + Send + Sync + 'static>>,
-                )>,
-                Self,
-            >,
+            Layered<TLLayer<Box<dyn TracingLiveMsgSubscriber>>, Self>,
             impl Future<Output = ()> + Send + 'static,
             TLGuard,
         ),
@@ -237,13 +200,7 @@ pub trait TLSubscriberExt: Sized {
     ) -> Result<U, Error>
     where
         D: TonicTryConnect,
-        Layered<
-            TLLayer<(
-                MsgReceiverSubscriber,
-                Option<Box<dyn Fn(&TLMsg) + Send + Sync + 'static>>,
-            )>,
-            Self,
-        >: Into<Dispatch>,
+        Layered<TLLayer<Box<dyn TracingLiveMsgSubscriber>>, Self>: Into<Dispatch>,
     {
         use tracing_subscriber::util::SubscriberInitExt;
         let (layered, future, mut _guard) = self.with_tracing_lv(dst, app_info, setting).await?;
@@ -263,7 +220,7 @@ pub struct AppRunData {
     pub app_run_id: Uuid,
     pub start_pos: u64,
     pub end_pos: u64,
-    pub record_count: u64,
+    pub last_record_index: u64,
 }
 
 #[allow(refining_impl_trait)]
@@ -278,13 +235,7 @@ where
         setting: TLSetting,
     ) -> Result<
         (
-            Layered<
-                TLLayer<(
-                    MsgReceiverSubscriber,
-                    Option<Box<dyn Fn(&TLMsg) + Send + Sync + 'static>>,
-                )>,
-                Self,
-            >,
+            Layered<TLLayer<Box<dyn TracingLiveMsgSubscriber>>, Self>,
             impl Future<Output = ()> + Send + 'static,
             TLGuard,
         ),
@@ -301,81 +252,26 @@ where
             .send_compressed(CompressionEncoding::Zstd)
             .max_decoding_message_size(usize::MAX)
             .accept_compressed(CompressionEncoding::Zstd);
-        let (msg_sender, msg_receiver) = flume::unbounded();
-        {
+        let (mut msg_sender, mut msg_receiver) = flume::unbounded();
+
+        let app_start = {
             let instant = Instant::now();
-            let _ = client.ping(Ping {}).await.unwrap();
+            let _ = client.ping(PingParam {}).await.unwrap();
             let rtt = instant.elapsed();
             let app_start = app_info.into_app_start(run_id, rtt);
             msg_sender
                 .send(RecordParam {
                     send_time: app_start.record_time.clone(),
-                    variant: Some(record_param::Variant::AppStart(app_start)),
+                    record_index: 0,
+                    variant: Some(record_param::Variant::AppStart(app_start.clone())),
                 })
                 .unwrap();
-        }
-        Ok((
-            self.with(TLLayer {
-                subscriber: (
-                    MsgReceiverSubscriber::new(msg_sender.clone()),
-                    setting.reconnect_and_persistence.map(|setting| {
-                        use bytes::Buf;
-                        let (sender, receiver) = flume::unbounded::<Bytes>();
-                        tokio::spawn(async move {
-                            let mut len = 0;
-                            let mut app_run_data_file = setting.metadata_info_writer;
-                            let app_run_start_pos = setting.metadata_info_cur_len;
-                            let mut encoder = async_compression::tokio::write::ZstdEncoder::new(
-                                setting.records_writer,
-                            );
-                            let mut buf = BytesMut::new();
-                            let mut app_run_data = AppRunData {
-                                app_run_id: run_id,
-                                start_pos: app_run_start_pos,
-                                end_pos: app_run_start_pos,
-                                record_count: 0,
-                            };
-                            while let Ok(bytes) = receiver.recv_async().await {
-                                app_run_data.end_pos = len;
-                                encoder
-                                    .get_mut()
-                                    .write_u64(app_run_data.record_count)
-                                    .await
-                                    .unwrap();
-                                encoder
-                                    .get_mut()
-                                    .write_u64(bytes.chunk().len() as u64)
-                                    .await
-                                    .unwrap();
-                                encoder.write_all(bytes.chunk()).await.unwrap();
-                                // <num:8><json len:8><record json>
-                                len += 8 + 8 + bytes.chunk().len() as u64;
-                                serde_json::to_writer_pretty((&mut buf).writer(), &app_run_data)
-                                    .unwrap();
-                                app_run_data_file
-                                    .seek(SeekFrom::Start(app_run_data.start_pos))
-                                    .await
-                                    .unwrap();
-                                app_run_data_file.write_all(buf.chunk()).await.unwrap();
-                                app_run_data_file.flush().await.unwrap();
-                                buf.clear();
-                                app_run_data.record_count += 1;
-                            }
-                        });
-                        thread_local! {
-                            static BUF: RefCell<BytesMut> = RefCell::new(BytesMut::new());
-                        }
-                        Box::new(move |msg: &TLMsg| {
-                            BUF.with_borrow_mut(|buf| {
-                                serde_json::to_writer_pretty(buf.writer(), msg).unwrap();
-                                let _ = sender.send(buf.split().freeze());
-                            })
-                        }) as _
-                    }),
-                ),
-                enable_enter: false,
-            }),
-            {
+            app_start
+        };
+
+        let (subscriber, future) = match setting.reconnect_and_persistence {
+            None => (
+                Box::new(MsgReceiverSubscriber::new(msg_sender.clone())) as _,
                 async move {
                     let app_run =
                         |mut client: TracingServiceClient<NoSubscriberService<Channel>>| {
@@ -404,6 +300,7 @@ where
                                             ) {
                                                 let mut app_stop = Some(param);
                                                 yield_now().await;
+                                                tokio::time::sleep(Duration::from_secs(1)).await;
                                                 let param = msg_receiver
                                                     .try_recv()
                                                     .ok()
@@ -422,21 +319,47 @@ where
                                 (client.app_run(stream).await, client)
                             }
                         };
-                    app_run(client).await.0.unwrap();
-                    // loop {
-                    //     let (r, _client) = { app_run(client).await };
-                    //     client = _client;
-                    //     match r {
-                    //         Ok(record_param) => {
-                    //             warn!("not expected app run end. {record_param:?}");
-                    //         }
-                    //         Err(err) => {
-                    //             error!("app run error end. {err:?}")
-                    //         }
-                    //     }
-                    // }
+                    let (r, _client) = app_run(client).await;
+                    use futures_util::StreamExt;
+                    match r {
+                        Ok(mut response) => {
+                            while let Some(item) = response.get_mut().next().await {
+                                match item {
+                                    Ok(_) => {}
+                                    Err(err) => {
+                                        eprintln!("tracing live stream error. {err:}");
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        Err(err) => {
+                            eprintln!("tracing live connect error. {err:}")
+                        }
+                    }
                 }
-            },
+                .left_future(),
+            ),
+            Some(setting) => {
+                let (subscriber, future) = reconnect_and_persistence(
+                    setting,
+                    msg_sender.clone(),
+                    msg_receiver,
+                    app_start,
+                    client,
+                )
+                .await;
+                (subscriber, future.right_future())
+            }
+        };
+
+        Ok((
+            self.with(TLLayer {
+                subscriber,
+                enable_enter: false,
+                record_index: 1.into(),
+            }),
+            future,
             TLGuard {
                 msg_sender,
                 is_normal_drop: false,

@@ -10,6 +10,7 @@ use hashbrown::HashMap;
 use std::prelude::rust_2015::String;
 use std::time::Duration;
 use uuid::Uuid;
+use alloc::string::ToString;
 
 impl From<f32> for field_value::Variant {
     fn from(value: f32) -> Self {
@@ -126,10 +127,10 @@ impl From<TLValue> for FieldValue {
 impl<'a> From<&'a VxMetadata> for PosInfo {
     fn from(value: &'a VxMetadata) -> Self {
         Self {
-            module_path: value.module_path.unwrap_or("unknown").into(),
+            module_path: value.module_path.clone().unwrap_or("unknown".into()).into(),
             file_line: alloc::format!(
                 "{}:{}",
-                value.file.unwrap_or("unknown"),
+                value.file.clone().unwrap_or("unknown".into()),
                 value.line.unwrap_or(0)
             ),
         }
@@ -140,11 +141,11 @@ impl<'a> From<&'a SpanInfo> for proto::SpanInfo {
     fn from(value: &'a SpanInfo) -> Self {
         Self {
             t_id: value.id,
-            name: value.metadata.name.into(),
+            name: value.metadata.name.clone().into(),
             file_line: alloc::format!(
                 "{}:{}",
-                value.metadata.file.unwrap_or("unknown"),
-                value.metadata.line.unwrap_or(0)
+                value.metadata.file.clone().unwrap_or("unknown".into()),
+                value.metadata.line.clone().unwrap_or(0)
             ),
         }
     }
@@ -175,6 +176,7 @@ impl From<TLMsg> for RecordParam {
     fn from(value: TLMsg) -> Self {
         Self {
             send_time: 0,
+            record_index: value.record_index(),
             variant: Some(value.into()),
         }
     }
@@ -188,6 +190,7 @@ impl From<TLMsg> for record_param::Variant {
                 span,
                 attributes,
                 parent_span,
+                ..
             } => record_param::Variant::SpanCreate(SpanCreate {
                 record_time: date.timestamp_nanos_opt().unwrap(),
                 span_info: Some((&span).into()),
@@ -195,7 +198,7 @@ impl From<TLMsg> for record_param::Variant {
                 parent_span_info: parent_span.map(|n| (&n).into()),
                 fields: attributes.into(),
                 target: span.metadata.target.into(),
-                level: proto::Level::from_str_name(span.metadata.level)
+                level: proto::Level::from_str_name(span.metadata.level.as_ref())
                     .unwrap()
                     .into(),
             }),
@@ -203,23 +206,24 @@ impl From<TLMsg> for record_param::Variant {
                 span,
                 date,
                 attributes,
+                ..
             } => record_param::Variant::SpanRecordField(SpanRecordField {
                 record_time: date.timestamp_nanos_opt().unwrap(),
                 pos_info: Some((&span.metadata).into()),
                 span_info: Some((&span).into()),
                 fields: attributes.into(),
             }),
-            TLMsg::SpanEnter { span, date } => record_param::Variant::SpanEnter(SpanEnter {
+            TLMsg::SpanEnter { span, date, .. } => record_param::Variant::SpanEnter(SpanEnter {
                 record_time: date.timestamp_nanos_opt().unwrap(),
                 pos_info: Some((&span.metadata).into()),
                 span_info: Some((&span).into()),
             }),
-            TLMsg::SpanLeave { span, date } => record_param::Variant::SpanLeave(SpanLeave {
+            TLMsg::SpanLeave { span, date, .. } => record_param::Variant::SpanLeave(SpanLeave {
                 record_time: date.timestamp_nanos_opt().unwrap(),
                 pos_info: Some((&span.metadata).into()),
                 span_info: Some((&span).into()),
             }),
-            TLMsg::SpanClose { span, date } => record_param::Variant::SpanClose(SpanClose {
+            TLMsg::SpanClose { span, date, .. } => record_param::Variant::SpanClose(SpanClose {
                 record_time: date.timestamp_nanos_opt().unwrap(),
                 pos_info: Some((&span.metadata).into()),
                 span_info: Some((&span).into()),
@@ -230,6 +234,7 @@ impl From<TLMsg> for record_param::Variant {
                 attributes,
                 span,
                 date,
+                ..
             } => record_param::Variant::Event(Event {
                 record_time: date.timestamp_nanos_opt().unwrap(),
                 message: message.into(),
@@ -237,7 +242,7 @@ impl From<TLMsg> for record_param::Variant {
                 fields: attributes.into(),
                 target: metadata.target.into(),
                 span_info: span.map(|n| (&n).into()),
-                level: proto::Level::from_str_name(metadata.level).unwrap().into(),
+                level: proto::Level::from_str_name(metadata.level.as_ref()).unwrap().into(),
             }),
         }
     }
@@ -325,6 +330,7 @@ impl TLAppInfoExt for TLAppInfo {
                 })
                 .collect(),
             rtt: rtt.as_secs_f64(),
+            reconnect: false,
         }
     }
 }

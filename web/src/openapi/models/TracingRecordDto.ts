@@ -120,6 +120,12 @@ export interface TracingRecordDto {
     positionInfo?: string | null;
     /**
      * 
+     * @type {number}
+     * @memberof TracingRecordDto
+     */
+    recordIndex: number;
+    /**
+     * 
      * @type {Date}
      * @memberof TracingRecordDto
      */
@@ -171,6 +177,7 @@ export function instanceOfTracingRecordDto(value: object): value is TracingRecor
     if (!('kind' in value) || value['kind'] === undefined) return false;
     if (!('name' in value) || value['name'] === undefined) return false;
     if (!('nodeId' in value) || value['nodeId'] === undefined) return false;
+    if (!('recordIndex' in value) || value['recordIndex'] === undefined) return false;
     if (!('recordTime' in value) || value['recordTime'] === undefined) return false;
     return true;
 }
@@ -199,6 +206,7 @@ export function TracingRecordDtoFromJSONTyped(json: any, ignoreDiscriminator: bo
         'parentId': json['parent_id'] == null ? undefined : json['parent_id'],
         'parentSpanTId': json['parent_span_t_id'] == null ? undefined : json['parent_span_t_id'],
         'positionInfo': json['position_info'] == null ? undefined : json['position_info'],
+        'recordIndex': json['record_index'],
         'recordTime': (new Date(json['record_time'])),
         'repeatedCount': json['repeated_count'] == null ? undefined : json['repeated_count'],
         'spanId': json['span_id'] == null ? undefined : json['span_id'],
@@ -233,6 +241,7 @@ export function TracingRecordDtoFromJSONTyped(json: any, ignoreDiscriminator: bo
         'parent_id': value['parentId'],
         'parent_span_t_id': value['parentSpanTId'],
         'position_info': value['positionInfo'],
+        'record_index': value['recordIndex'],
         'record_time': ((value['recordTime']).toISOString()),
         'repeated_count': value['repeatedCount'],
         'span_id': value['spanId'],

@@ -2,9 +2,9 @@ use crate::record::TracingKind;
 use crate::running_app::RunMsg;
 use crate::tracing_service::TracingTreeRecordDto;
 use crate::tracing_service::{
-   AppLatestInfoDto, AppNodeFilter, AppNodeRunDto, AppRunDto, BigInt, CursorInfo,
-   TracingRecordDto, TracingRecordFieldFilter, TracingRecordFilter, TracingService,
-   TracingSpanRunDto,
+    AppLatestInfoDto, AppNodeFilter, AppNodeRunDto, AppRunDto, CursorInfo,
+    TracingRecordDto, TracingRecordFieldFilter, TracingRecordFilter, TracingService,
+    TracingSpanRunDto,
 };
 use crate::web_error::AppError;
 use axum::extract::rejection::QueryRejection;
@@ -51,7 +51,7 @@ pub fn router(tracing_service: TracingService, msg_sender: flume::Sender<RunMsg>
     )))]
     struct ApiDoc;
 
-   let span = Span::current();
+    let span = Span::current();
 
     let (router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .nest("/api/v1/apps", apps::router(tracing_service.clone()))
@@ -61,7 +61,7 @@ pub fn router(tracing_service: TracingService, msg_sender: flume::Sender<RunMsg>
             TraceLayer::new_for_http()
                 // Create our own span for the request and include the matched path. The matched
                 // path is useful for figuring out which handler the request was routed to.
-                .make_span_with(move|req: &Request| {
+                .make_span_with(move |req: &Request| {
                     let method = req.method();
                     let uri = req.uri();
 
@@ -295,7 +295,7 @@ mod apps {
 
 #[derive(Default, Clone, Debug, Deserialize, IntoParams, ToSchema)]
 pub struct NodesPageInput {
-    after_record_id: Option<BigInt>,
+    after_record_time: Option<DateTime<FixedOffset>>,
     app_build_ids: Option<SmallVec<[(Uuid, Option<String>); 2]>>,
 }
 
@@ -310,8 +310,8 @@ mod nodes {
     use chrono::{DateTime, FixedOffset, Local};
     use serde::Serialize;
     use std::iter::Iterator;
-   use std::time::Duration;
-   use utoipa::ToSchema;
+    use std::time::Duration;
+    use utoipa::ToSchema;
     use utoipa_axum::router::OpenApiRouter;
     use utoipa_axum::routes;
 
@@ -366,7 +366,7 @@ mod nodes {
             .list_node(AppNodeFilter {
                 main_app_id,
                 app_build_ids: input.app_build_ids,
-                after_record_id: input.after_record_id,
+                after_record_time: input.after_record_time,
             })
             .await?;
         let apps = tracing_service.list_latest_apps().await?;
@@ -380,9 +380,11 @@ mod nodes {
 }
 
 mod records {
+    use super::{Query, Result};
     use crate::tracing_service::QueryTracingRecordByIds;
-use super::{Query, Result};
-    use crate::tracing_service::{BigInt, TracingRecordDto, TracingRecordFilter, TracingService, TracingTreeRecordDto};
+    use crate::tracing_service::{
+        TracingRecordDto, TracingRecordFilter, TracingService, TracingTreeRecordDto,
+    };
     use axum::extract::State;
     use axum::Json;
     use serde::Deserialize;
@@ -434,7 +436,10 @@ use super::{Query, Result};
         State(tracing_service): State<TracingService>,
         Query(filter): Query<QueryTracingRecordByIds>,
     ) -> Result<Json<Vec<TracingTreeRecordDto>>> {
-        let r: Vec<_> = tracing_service.list_tree_records_by_ids(filter.ids).await?.collect();
+        let r: Vec<_> = tracing_service
+            .list_tree_records_by_ids(filter.ids)
+            .await?
+            .collect();
         Ok(Json(r))
     }
 

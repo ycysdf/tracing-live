@@ -7,26 +7,29 @@ use std::time::Duration;
 use tokio::net::TcpListener;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Server;
-use tonic::Status;
 use tower_http::compression::CompressionLayer;
-use tracing::{info, info_span, instrument, warn, Instrument, Span};
+use tracing::{error, info_span, instrument, warn, Instrument, Span};
 use tracing_lv_core::{
     proto::tracing_service_server::TracingServiceServer,
     proto::{record_param, RecordParam},
     MsgReceiverSubscriber, TLAppInfo, TLAppInfoExt, TLLayer,
 };
+use tracing_lv_server::running_app::{
+    AppRunMsg, AppRunRecord, TLConfig, POSTGRESQL_MAX_BIND_PARAM_COUNT,
+};
+use tracing_lv_server::tracing_service::TracingRecordBatchInserter;
 use tracing_lv_server::{
     build,
     grpc_service::{AppRunLifetime, TracingServiceImpl},
     running_app::RunMsg,
     running_app::RunningApps,
     tracing_service::TracingService,
-    web_service,
+    web_service, RECORD_ID_GENERATOR, SELF_APP_ID,
 };
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
-use uuid::{uuid, Uuid};
+use uuid::Uuid;
 
 #[instrument]
 fn program_panic_catch() {
@@ -54,13 +57,14 @@ async fn main() -> anyhow::Result<()> {
         .with(TLLayer {
             subscriber: MsgReceiverSubscriber::new(self_record_sender),
             enable_enter: false,
+            record_index: 1.into(),
         })
         .with(tracing_subscriber::fmt::layer().pretty())
         .init();
     program_panic_catch();
 
     let database_url = env::var("DATABASE_URL")
-        .unwrap_or("postgresql://postgres:123456@127.0.0.1:5432/tracing".into());
+        .unwrap_or("postgresql://postgres:123456@127.0.0.1:5432/tracing-dev".into());
     let dc = Database::connect(ConnectOptions::new(database_url.as_str()))
         .instrument(info_span!("connect db", database_url))
         .await
@@ -73,30 +77,40 @@ async fn main() -> anyhow::Result<()> {
     {
         let tracing_service = tracing_service.clone();
         let msg_sender = msg_sender.clone();
+        let (app_run_msg_sender, app_run_msg_receiver) = flume::unbounded::<AppRunMsg>();
         tokio::spawn(async move {
             let fut = async move {
-                let app_info = TLAppInfo::new(
-                    uuid!("51E5297E-949F-DABC-76B1-F34E5FCEA32F"),
-                    "Tracing Live Server",
-                    build::PKG_VERSION,
-                )
-                .node_name("Server");
-                let mut self_lifetime = AppRunLifetime::new(
+                let app_info =
+                    TLAppInfo::new(SELF_APP_ID, "Tracing Live Server", build::PKG_VERSION)
+                        .node_name("Server");
+                let (mut self_lifetime, app_run_record) = AppRunLifetime::new(
                     app_info.into_app_start(Uuid::new_v4(), Duration::default()),
                     tracing_service,
-                    msg_sender,
+                    app_run_msg_sender,
                 )
                 .await?;
+                msg_sender.send(RunMsg::AppRun {
+                    app_run_record,
+                    record_sender: self_lifetime.record_sender.clone(),
+                    record_receiver: app_run_msg_receiver,
+                })?;
                 while let Ok(msg) = self_record_receiver.recv_async().await {
                     let variant = msg.variant.unwrap();
                     let record = if let record_param::Variant::AppStop(_) = variant {
                         unreachable!("AppStop should not be sent to self_record_receiver");
-                        // break;
                     } else {
                         self_lifetime.record(variant).await?
                     };
-                    if let Err(err) = self_lifetime.record_sender.send(record) {
-                        info!(?err, "record_sender send failed. exit!");
+                    if let Err(err) =
+                        self_lifetime
+                            .record_sender
+                            .send(AppRunMsg::Record(AppRunRecord {
+                                id: RECORD_ID_GENERATOR.next(),
+                                record_index: msg.record_index as _,
+                                variant: record,
+                            }))
+                    {
+                        error!(?err, "record_sender send failed. exit!");
                         break;
                     }
                 }
@@ -108,20 +122,32 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-
     let handle_records_future = tokio::spawn({
         let tracing_service = tracing_service.clone();
-        let id = tracing_service
-            .query_last_record_id()
-            .await
-            .map_err(|err| Status::internal(format!("query_last_record_id error. {err}")))?
-            .unwrap_or(0);
         let max_buf_count = env::var("RECORD_MAX_BUF_COUNT")
             .ok()
             .map(|n| n.parse::<usize>().ok())
             .flatten();
         async move {
-            let mut running_apps = RunningApps::new(tracing_service, id, max_buf_count);
+            let max_buf_count_max_value =
+                POSTGRESQL_MAX_BIND_PARAM_COUNT / TracingRecordBatchInserter::BIND_COL_COUNT;
+            let record_max_buf_count = max_buf_count
+                .unwrap_or(max_buf_count_max_value)
+                .min(max_buf_count_max_value);
+
+            let mut running_apps = RunningApps::new(
+                tracing_service,
+                TLConfig {
+                    record_max_delay: Duration::from_millis(
+                        env::var("RECORD_MAX_DELAY")
+                            .ok()
+                            .map(|n| n.parse::<u64>().ok())
+                            .flatten()
+                            .unwrap_or(200),
+                    ),
+                    record_max_buf_count,
+                },
+            );
             running_apps.handle_records(msg_receiver).await
         }
         .instrument(info_span!("records handle task", max_buf_count))
@@ -133,7 +159,7 @@ async fn main() -> anyhow::Result<()> {
     let https_web_serve_future = tokio::spawn({
         let addr = SocketAddr::from((
             Ipv4Addr::UNSPECIFIED,
-            std::env::var("WEB_PORT")
+            env::var("WEB_PORT")
                 .ok()
                 .map(|n| n.parse().ok())
                 .flatten()
@@ -164,7 +190,7 @@ async fn main() -> anyhow::Result<()> {
     let grpc_serve_future = tokio::spawn({
         let addr = SocketAddr::from((
             Ipv4Addr::UNSPECIFIED,
-            std::env::var("GRPC_PORT")
+            env::var("GRPC_PORT")
                 .ok()
                 .map(|n| n.parse().ok())
                 .flatten()
@@ -197,7 +223,7 @@ async fn main() -> anyhow::Result<()> {
             r??
         }
         r = handle_records_future => {
-            r??
+            r?
         }
     })
 }

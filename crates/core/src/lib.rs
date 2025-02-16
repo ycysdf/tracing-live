@@ -5,7 +5,7 @@ extern crate std;
 mod flags;
 pub use flags::*;
 #[cfg(feature = "std")]
-#[path = "generated_proto.rs"]
+#[path = "tracing.rs"]
 pub mod proto;
 #[cfg(feature = "std")]
 mod tonic;
@@ -15,4 +15,5 @@ pub use tonic::*;
 mod tracing_layer;
 
 pub use tracing_layer::*;
-// tonic::include_proto!("tracing");
+#[cfg(all(feature = "build-proto", not(feature = "build-proto-dev")))]
+::tonic::include_proto!("tracing");
