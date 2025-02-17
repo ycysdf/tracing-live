@@ -374,6 +374,7 @@ pub mod tracing_service_server {
         clippy::let_unit_value,
     )]
     use tonic::codegen::*;
+    use alloc::boxed::Box;
     /// Generated trait containing gRPC methods that should be implemented for use with TracingServiceServer.
     #[async_trait]
     pub trait TracingService: std::marker::Send + std::marker::Sync + 'static {
