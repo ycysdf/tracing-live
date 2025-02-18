@@ -5,7 +5,7 @@ COPY . .
 RUN cargo build --release --bin tracing-lv-server --target x86_64-unknown-linux-musl
 
 FROM alpine:3
-ENV DATABASE_URL="postgresql://postgres:123456@host.docker.internal:5432/tracing"
+ENV DATABASE_URL="postgresql://postgres:123456@host.docker.internal:5432/postgres"
 ENV AUTO_INIT_DATABASE="true"
 EXPOSE 443
 EXPOSE 8080
