@@ -1,7 +1,7 @@
 use alloc::borrow::Cow;
 use chrono::{DateTime, Utc};
 use core::fmt::{Debug, Display, Formatter};
-use core::sync::atomic::AtomicU64;
+use portable_atomic::AtomicU64;
 use derive_more::From;
 use hashbrown::HashMap;
 use serde::{Deserialize, Serialize};
@@ -13,7 +13,7 @@ use tracing_subscriber::layer::Context;
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::Layer;
 use uuid::Uuid;
-
+use alloc::string::String;
 #[derive(Serialize, Deserialize, Default, Debug, Clone)]
 pub struct SpanAttrs(pub HashMap<Cow<'static, str>, TLValue>);
 
@@ -84,6 +84,12 @@ impl Display for TLValue {
 
 impl From<&'static str> for TLValue {
     fn from(value: &'static str) -> Self {
+        TLValue::Str(value.into())
+    }
+}
+
+impl From<String> for TLValue {
+    fn from(value: String) -> Self {
         TLValue::Str(value.into())
     }
 }

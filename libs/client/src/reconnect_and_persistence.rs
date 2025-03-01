@@ -1,5 +1,5 @@
-use crate::persistence::{EncodeBytesSubscriber, RecordsPersistenceToFile, RECORD_BLOCK_SIZE, RWS};
 use crate::NoSubscriberService;
+use crate::persistence::{EncodeBytesSubscriber, RECORD_BLOCK_SIZE, RWS, RecordsPersistenceToFile};
 use bytes::Bytes;
 use chrono::Utc;
 use futures_util::StreamExt;
@@ -7,13 +7,12 @@ use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::task::yield_now;
-use tokio::time::Instant;
 use tonic::transport::Channel;
 use tracing::{error, warn};
+use tracing_lv_core::TracingLiveMsgSubscriber;
 use tracing_lv_core::proto::app_run_replay::Variant;
 use tracing_lv_core::proto::tracing_service_client::TracingServiceClient;
-use tracing_lv_core::proto::{record_param, AppStart, PingParam, RecordParam};
-use tracing_lv_core::{TLLayer, TracingLiveMsgSubscriber};
+use tracing_lv_core::proto::{AppStart, RecordParam, record_param};
 
 pub struct TLReconnectAndPersistenceSetting {
     pub records_writer: Arc<Mutex<dyn RWS + Send>>,
@@ -31,13 +30,9 @@ impl TLReconnectAndPersistenceSetting {
                 Duration::from_secs(4),
                 Duration::from_secs(8),
                 Duration::from_secs(8),
-                Duration::from_secs(8),
-                Duration::from_secs(8),
-                Duration::from_secs(8),
                 Duration::from_secs(32),
                 Duration::from_secs(64),
                 Duration::from_secs(256),
-                Duration::from_secs(1024),
             ],
             compression_level: 8,
         })
@@ -107,7 +102,6 @@ pub async fn reconnect_and_persistence(
                         .send(RecordMsg::NewRecord(buf_recv[0].1))
                         .is_err()
                     {
-                        println!("record_index_sender SEND ERROR !!!!!");
                         break;
                     }
                     if is_close {
@@ -122,9 +116,9 @@ pub async fn reconnect_and_persistence(
             let sender = sender.clone();
             async move {
                 let mut received_msg = record_index_receiver.recv_async().await;
-                let mut cur_record_index = 0;
+                // let mut cur_record_index = 0;
                 let mut file = RecordsPersistenceToFile::new(setting.compression_level).unwrap();
-                let mut send_msgs = |cur_record_index: &mut u64| {
+                let mut send_msgs = |cur_record_index: u64| {
                     let mut records_io = setting.records_writer.lock().unwrap();
 
                     let _metadata = { file.init_exist(run_id, &mut *records_io).unwrap() };
@@ -132,30 +126,30 @@ pub async fn reconnect_and_persistence(
                         &mut *records_io,
                         &_metadata,
                         &_metadata.current_instance_footer,
-                        *cur_record_index,
+                        cur_record_index,
                         |msg| {
                             // println!("msg: {msg:?}");
-                            *cur_record_index = msg.record_index();
+                            // *cur_record_index = msg.record_index();
                             let _ = msg_sender.send(msg.into());
                         },
                     )
                     .unwrap();
                 };
-                while let Ok(mut msg) = received_msg {
+                while let Ok(msg) = received_msg {
                     match msg {
                         RecordMsg::NewRecord(_record_index) => {
-                            cur_record_index = _record_index;
+                            // cur_record_index = _record_index;
                             if msg_sender.is_disconnected() {
                                 // println!("msg_sender.is_disconnected()");
                                 break;
                             }
-                            send_msgs(&mut cur_record_index);
+                            send_msgs(_record_index);
                             // println!("NewRecord cur_record_index: {cur_record_index:?}");
                         }
                         RecordMsg::ReConnect { receiver } => match receiver.await {
                             Ok(record_index) => {
-                                cur_record_index = record_index + 1;
-                                send_msgs(&mut cur_record_index);
+                                // cur_record_index = record_index + 1;
+                                send_msgs(record_index + 1);
                             }
                             Err(_err) => {
                                 received_msg = record_index_receiver.recv_async().await;
@@ -167,14 +161,18 @@ pub async fn reconnect_and_persistence(
                             _task_handle.await.unwrap();
                             while let Ok(msg) = record_index_receiver.try_recv() {
                                 match msg {
-                                    RecordMsg::NewRecord(mut record_index) => {
-                                        send_msgs(&mut record_index);
+                                    RecordMsg::NewRecord(record_index) => {
+                                        send_msgs(record_index);
                                     }
                                     RecordMsg::Close { .. } => {
-                                        warn!("Close should not be sent to record_index_receiver  when already close");
+                                        warn!(
+                                            "Close should not be sent to record_index_receiver  when already close"
+                                        );
                                     }
                                     RecordMsg::ReConnect { .. } => {
-                                        warn!("ReConnect should not be sent to record_index_receiver when already close");
+                                        warn!(
+                                            "ReConnect should not be sent to record_index_receiver when already close"
+                                        );
                                     }
                                 }
                             }
@@ -223,10 +221,7 @@ pub async fn reconnect_and_persistence(
                                   (param, app_stop, is_end)
                               } else {
                                   let param = msg_receiver.recv_async().await.ok()?;
-                                  if matches!(
-                                                param.variant.as_ref().unwrap(),
-                                                record_param::Variant::AppStop(_)
-                                            ) {
+                                  if matches!(param.variant.as_ref().unwrap(),record_param::Variant::AppStop(_)) {
                                       let mut app_stop = Some(param);
                                       yield_now().await;
                                       let (reply_sender, reply_receiver) =
@@ -274,27 +269,27 @@ pub async fn reconnect_and_persistence(
                                     app_start.reconnect = true;
                                     let (sender, receiver) = tokio::sync::oneshot::channel();
                                     if record_index_sender
-                                       .send(RecordMsg::ReConnect { receiver })
-                                       .is_err()
+                                        .send(RecordMsg::ReConnect { receiver })
+                                        .is_err()
                                     {
                                         break;
                                     }
                                     reconnect_sender = Some(sender);
                                     while msg_receiver.try_recv().is_ok() {}
                                     msg_sender
-                                       .send(RecordParam {
-                                           send_time: Utc::now().timestamp_nanos_opt().unwrap(),
-                                           record_index: 0,
-                                           variant: Some(record_param::Variant::AppStart(
-                                               app_start.clone(),
-                                           )),
-                                       })
-                                       .unwrap();
+                                        .send(RecordParam {
+                                            send_time: Utc::now().timestamp_nanos_opt().unwrap(),
+                                            record_index: 0,
+                                            variant: Some(record_param::Variant::AppStart(
+                                                app_start.clone(),
+                                            )),
+                                        })
+                                        .unwrap();
                                     continue 'r;
                                 }
                             }
                         }
-                        println!("server app_run stream end");
+                        // println!("server app_run stream end");
                         return;
                     }
                     Err(err) => {
@@ -302,7 +297,18 @@ pub async fn reconnect_and_persistence(
                         reconnect_times += 1;
                         error!("app run error end. {err:?}");
                         eprintln!("app run error end. {err:?}");
-                        tokio::time::sleep(Duration::from_secs(3)).await;
+                        let timeout = setting
+                            .reconnect_interval
+                            .get(reconnect_times)
+                            .cloned()
+                            .unwrap_or(
+                                setting
+                                    .reconnect_interval
+                                    .last()
+                                    .cloned()
+                                    .unwrap_or(Duration::from_secs(3)),
+                            );
+                        tokio::time::sleep(timeout).await;
                     }
                 }
             }

@@ -533,9 +533,13 @@ impl AppRunLifetime {
         let record_time = DateTime::from_timestamp_nanos(param.record_time);
         let (span_info, running_span) = if let Some(span_info) = param.span_info {
             let span_info = self.new_span_info(span_info, None);
-            let running_span = self.running_spans.get(&span_info.t_id).unwrap().clone();
-
-            (Some(span_info), Some(running_span))
+            match self.running_spans.get(&span_info.t_id).cloned() {
+                None => {
+                    warn!(?span_info, "not found running span");
+                    (None, None)
+                }
+                Some(running_span) => (Some(span_info), Some(running_span)),
+            }
         } else {
             (None, None)
         };
@@ -615,25 +619,20 @@ impl AppRunLifetime {
 
         let _ = async {
             for (t_id, running_span) in running_spans {
-                let span_cache_id = self
-                    .span_id_cache
-                    .iter()
-                    .find(|n| n.1 == &running_span.id)
-                    .map(|n| n.0)
-                    .cloned()
-                    .unwrap();
+                let span_info = tracing_lv_core::proto::SpanInfo {
+                    t_id,
+                    name: running_span.info.name.to_string(),
+                    file_line: running_span.info.file_line.to_string(),
+                };
+                let pos_info = PosInfo {
+                    module_path: running_span.info.module_path.to_string(),
+                    file_line: running_span.info.file_line.to_string(),
+                };
                 if let Err(err) = self
                     .span_leave(SpanLeave {
                         record_time: record_time.timestamp_nanos_opt().unwrap(),
-                        span_info: Some(tracing_lv_core::proto::SpanInfo {
-                            t_id,
-                            name: span_cache_id.name.to_string(),
-                            file_line: span_cache_id.file_line.to_string(),
-                        }),
-                        pos_info: Some(PosInfo {
-                            module_path: "".to_string(),
-                            file_line: span_cache_id.file_line.to_string(),
-                        }),
+                        span_info: Some(span_info.clone()),
+                        pos_info: Some(pos_info.clone()),
                     })
                     .await
                 {
@@ -642,15 +641,8 @@ impl AppRunLifetime {
                 if let Err(err) = self
                     .span_close(SpanClose {
                         record_time: record_time.timestamp_nanos_opt().unwrap(),
-                        span_info: Some(tracing_lv_core::proto::SpanInfo {
-                            t_id,
-                            name: span_cache_id.name.to_string(),
-                            file_line: span_cache_id.file_line.to_string(),
-                        }),
-                        pos_info: Some(PosInfo {
-                            module_path: "".to_string(),
-                            file_line: span_cache_id.file_line.to_string(),
-                        }),
+                        span_info: Some(span_info),
+                        pos_info: Some(pos_info),
                     })
                     .await
                 {

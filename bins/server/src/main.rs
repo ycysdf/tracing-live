@@ -8,7 +8,8 @@ use tokio::net::TcpListener;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Server;
 use tower_http::compression::CompressionLayer;
-use tracing::{error, info_span, instrument, warn, Instrument, Span};
+use tracing::{error, info_span, warn, Instrument};
+use tracing_lv_core::catch_panic::program_panic_catch;
 use tracing_lv_core::{
     proto::tracing_service_server::TracingServiceServer,
     proto::{record_param, RecordParam},
@@ -31,25 +32,13 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
-#[instrument]
-fn program_panic_catch() {
-    let prev_hook = std::panic::take_hook();
-    let span = Span::current();
-    std::panic::set_hook(Box::new(move |panic_info| {
-        span.in_scope(|| {
-            tracing_panic::panic_hook(panic_info);
-            prev_hook(panic_info);
-        })
-    }));
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let (self_record_sender, self_record_receiver) = flume::unbounded::<RecordParam>();
     tracing_subscriber::registry()
         .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
             format!(
-            "{}=debug,tower_http=debug,axum::rejection=trace,tracing_lv_server::running_app=warn",
+            "warn,tracing_lv_core::catch_panic=info,{}=info,tower_http=debug,axum::rejection=trace,tracing_lv_server::running_app=warn",
             env!("CARGO_CRATE_NAME")
          )
             .into()

@@ -13,6 +13,8 @@ mod tonic;
 pub use tonic::*;
 
 mod tracing_layer;
+#[cfg(feature = "std")]
+pub mod catch_panic;
 
 pub use tracing_layer::*;
 #[cfg(all(feature = "build-proto", not(feature = "build-proto-dev")))]

@@ -1,11 +1,11 @@
 [package]
 name = "simple"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 #tracing-lv = { version = "0.0.1" }
-tracing-lv = { version = "0.0.1", path = "../../libs/client" }
+tracing-lv = { version = "0.0.2", path = "../../libs/client" }
 tracing = "0.1"
 tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

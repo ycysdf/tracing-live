@@ -6,9 +6,10 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::{Debug, Formatter};
 use std::time::Duration;
 use tracing::{info, info_span, instrument, warn, Instrument, Span};
-use tracing_lv::TLAppInfo;
-use tracing_lv::TLSubscriberExt;
+use tracing_lv::catch_panic::program_panic_catch;
+use tracing_lv::{TLReconnectAndPersistenceSetting, TLSubscriberExt};
 use tracing_lv::FLAGS_AUTO_EXPAND;
+use tracing_lv::{TLAppInfo, TLSetting};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -24,7 +25,19 @@ async fn main() -> anyhow::Result<()> {
             .with_data("brief", "IP")
             .with_data("node_name", "Node Name")
             .with_data("second_name", "Cur Os Name"),
-            Default::default(),
+            TLSetting {
+                reconnect_and_persistence: Some(
+                    TLReconnectAndPersistenceSetting::from_file(
+                        std::fs::OpenOptions::new()
+                            .read(true)
+                            .write(true)
+                            .create(true)
+                            .open("./test-data/tl.log")
+                            .unwrap(),
+                    )
+                    .unwrap(),
+                ),
+            },
             app_main,
         )
         .await?
@@ -47,6 +60,14 @@ where
         write!(f, "{:#?}", &self.0)
     }
 }
+
+// async fn tracing_enter() -> anyhow::Result<()> {
+//     program_panic_catch();
+//     app_main().await?;
+//     Ok(())
+// }
+
+#[instrument]
 async fn app_main() -> anyhow::Result<()> {
     info!(
         a = 1,
@@ -102,24 +123,25 @@ async fn app_main() -> anyhow::Result<()> {
             let _entered = span.enter();
             info!("EVENT");
         })
-        .await
-        .unwrap();
+        .await?;
     }
 
     tracing::info!("Test thread");
-    std::thread::spawn(|| {
-        hello();
+    let span1 = Span::current();
+    std::thread::spawn(move || {
+        span1.in_scope(|| {
+            hello();
+        })
     })
     .join()
     .unwrap();
     tracing::info!("Test thread JOIN END");
 
     tracing::info!("Test spawn_blocking");
-    tokio::task::spawn_blocking(|| {
-        hello();
-    })
-    .await
-    .unwrap();
+    let span = info_span!("spawn_blocking");
+    tokio::task::spawn_blocking(move || span.in_scope(|| hello()))
+        .await
+        .unwrap();
     tracing::info!("Test spawn_blocking END");
 
     let span = { info_span!("DoThingsContainer") };
@@ -242,8 +264,8 @@ async fn test_saved(container: Span) {
 
 #[instrument]
 async fn many_event() {
-    for _ in 0..1024 {
-        info!("event");
+    for i in 0..1024 {
+        info!("event {i}");
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
 }

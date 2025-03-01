@@ -10,7 +10,6 @@ use hashbrown::HashMap;
 use std::prelude::rust_2015::String;
 use std::time::Duration;
 use uuid::Uuid;
-use alloc::string::ToString;
 
 impl From<f32> for field_value::Variant {
     fn from(value: f32) -> Self {

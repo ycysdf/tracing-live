@@ -1,26 +1,17 @@
-use binrw::io::TakeSeekExt;
 use binrw::{binrw, BinRead, BinResult, BinWrite};
 use bytes::{BufMut, Bytes, BytesMut};
-use futures_util::SinkExt;
 use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
-use std::path::PathBuf;
-use std::sync::atomic::AtomicU64;
-use std::time::{Duration, Instant};
-use tokio::io::{AsyncRead, AsyncSeek, AsyncWrite, AsyncWriteExt};
-use tokio::task::JoinHandle;
-use tracing_lv_core::{TLAppInfo, TLMsg, TracingLiveMsgSubscriber};
-use uuid::Uuid;
+// use portable_atomic::AtomicU64;
+use tracing_lv_core::{TLMsg, TracingLiveMsgSubscriber};
 use zstd::zstd_safe::WriteBuf;
-
-pub trait RecordsPersistence {}
 
 pub struct RecordsPersistenceToFile {
     compressor: zstd::bulk::Compressor<'static>,
     compressor_with_dict: zstd::bulk::Compressor<'static>,
     decompressor_with_dict: zstd::bulk::Decompressor<'static>,
-    decompressor: zstd::bulk::Decompressor<'static>,
+    // decompressor: zstd::bulk::Decompressor<'static>,
     cursor_buf: Cursor<Vec<u8>>,
     buf: Vec<u8>,
     pub compression_level: i32,
@@ -32,7 +23,7 @@ impl RecordsPersistenceToFile {
             compressor: zstd::bulk::Compressor::new(compression_level)?,
             compressor_with_dict: zstd::bulk::Compressor::new(compression_level)?,
             decompressor_with_dict: zstd::bulk::Decompressor::new()?,
-            decompressor: zstd::bulk::Decompressor::new()?,
+            // decompressor: zstd::bulk::Decompressor::new()?,
             cursor_buf: Default::default(),
             buf: vec![],
             compression_level,
@@ -148,7 +139,7 @@ impl TLRecordsMetadata {
         self.current_block_header.prev
     }
     pub fn append_record(&mut self, record_index: u64, record_size: usize) -> MemorySpan {
-        let mut cur_block_index = record_index / RECORD_BLOCK_SIZE as u64;
+        let cur_block_index = record_index / RECORD_BLOCK_SIZE as u64;
         let block_record_index = record_index - cur_block_index * RECORD_BLOCK_SIZE as u64;
         let memory_span = self.add_size(record_size as _);
         self.current_block_header.records_info[block_record_index as usize].memory_span =
@@ -158,8 +149,6 @@ impl TLRecordsMetadata {
         memory_span
     }
 }
-
-// 递增压缩可以索引存储文件
 
 pub trait RWS: Write + Read + Seek {}
 impl<T> RWS for T where T: Write + Read + Seek {}
@@ -244,7 +233,7 @@ impl RecordsPersistenceToFile {
     ) -> BinResult<TLRecordsMetadata> {
         let mut buf = [0u8; 4];
         stream.rewind()?;
-        if (stream.read_exact(&mut buf).is_err() || buf != FORMAT_MAGIC) {
+        if stream.read_exact(&mut buf).is_err() || buf != FORMAT_MAGIC {
             self.reset(&mut stream, instance_id)
         } else {
             self.init_exist(instance_id, stream)
@@ -260,7 +249,7 @@ impl RecordsPersistenceToFile {
         to: &mut Vec<TLBlockHeader>,
     ) -> BinResult<()> {
         stream.rewind()?;
-        let mut cur_block_index = instance_footer.last_record_index / RECORD_BLOCK_SIZE as u64;
+        let cur_block_index = instance_footer.last_record_index / RECORD_BLOCK_SIZE as u64;
         let mut header = if instance_footer.id == records_metadata.current_instance_footer.id {
             to.push(records_metadata.current_block_header.clone());
             match cur_block_index.cmp(&from_block_index) {
@@ -300,7 +289,7 @@ impl RecordsPersistenceToFile {
         mut stream: impl RWS + 'a,
     ) -> BinResult<impl Iterator<Item = BinResult<TLRecordsInstanceFooter>> + 'a> {
         stream.rewind()?;
-        let mut records_metadata: TLRecordsMetadata = TLRecordsMetadata::read(&mut stream)?;
+        let records_metadata: TLRecordsMetadata = TLRecordsMetadata::read(&mut stream)?;
         let mut prev = records_metadata.current_instance_footer.prev;
         Ok(
             core::iter::once(Ok(records_metadata.current_instance_footer)).chain(
@@ -361,7 +350,7 @@ impl RecordsPersistenceToFile {
             let _record_index = from_record_index + i as u64;
             // println!("record_info {_record_index} index: {record_info:?}");
             let record = self.read_record(&mut stream, record_info.memory_span)?;
-            assert_eq!(_record_index, record.record_index());
+            // assert_eq!(_record_index, record.record_index());
             records_callback(record);
         }
 
@@ -463,8 +452,8 @@ impl RecordsPersistenceToFile {
         frames: impl Iterator<Item = (&'a [u8], u64)>,
     ) -> BinResult<()> {
         stream.seek(SeekFrom::Start(0))?;
-        let mut records_metadata = TLRecordsMetadata::read(&mut stream).unwrap();
-        let mut last_record_index = records_metadata.current_instance_footer.last_record_index;
+        let mut records_metadata = TLRecordsMetadata::read(&mut stream)?;
+        let last_record_index = records_metadata.current_instance_footer.last_record_index;
         let mut cur_block_index = last_record_index / RECORD_BLOCK_SIZE as u64;
         stream.seek(SeekFrom::Start(records_metadata.cur_pos))?;
 
@@ -503,8 +492,8 @@ impl RecordsPersistenceToFile {
 
                         records_metadata =
                             self.reset(&mut stream, records_metadata.current_instance_footer.id)?;
-                        last_record_index =
-                            records_metadata.current_instance_footer.last_record_index;
+                        // last_record_index =
+                        //     records_metadata.current_instance_footer.last_record_index;
 
                         stream.seek(SeekFrom::Start(records_metadata.cur_pos))?;
                         stream.write_all(dict.as_slice())?;
@@ -645,11 +634,6 @@ impl RecordsPersistenceToFile {
     }
 }
 thread_local! {
-    static BUF1: RefCell<Cursor<Vec<u8>>> = RefCell::new(Cursor::new(Vec::new()));
-    static BUF2: RefCell<Vec<u8>> = RefCell::new(Vec::new());
-}
-
-thread_local! {
     static BUF: RefCell<BytesMut> = RefCell::new(BytesMut::new());
 }
 
@@ -658,165 +642,6 @@ pub struct EncodeBytesSubscriber {
     pub sender: flume::Sender<Option<(Bytes, u64)>>,
 }
 
-/*impl EncodeBytesSubscriber {
-    pub fn new() -> Self {
-        // let records_io = Arc::new(tokio::sync::Mutex::new(
-        //     async_compression::tokio::write::ZstdEncoder::new(setting.records_writer),
-        // ));
-        /*
-        tokio::spawn({
-            let records_io = setting.records_writer.clone();
-            async move {
-                let file_msg_count = 64;
-                // let mut len = 0;
-                // let mut app_run_data_file = setting.metadata_info_writer;
-                // let app_run_start_pos = setting.metadata_info_cur_len;
-                // let mut buf = BytesMut::new();
-                // let mut app_run_data = AppRunData {
-                //     app_run_id,
-                //     start_pos: app_run_start_pos,
-                //     end_pos: app_run_start_pos,
-                //     last_record_index: 0,
-                // };
-                let mut dir: PathBuf = format!("{app_run_id}").into();
-                let max_buf_recv = 64;
-                let mut buf_recv = Vec::with_capacity(max_buf_recv);
-                let mut first = true;
-                while let Ok(n) = receiver.recv_async().await {
-                    buf_recv.clear();
-                    buf_recv.push(n);
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                    while let Ok(n) = receiver.try_recv() {
-                        buf_recv.push(n);
-                        if buf_recv.len() == max_buf_recv {
-                            break;
-                        }
-                    }
-                    {
-                        (dir, buf_recv) = tokio::task::spawn_blocking({
-                            let records_io = records_io.clone();
-                            move || {
-                                let mut records_io = records_io.lock();
-                                let mut records_io = records_io.unwrap();
-                                records_io.seek(SeekFrom::Start(0))?;
-                                let mut records_io = if first {
-                                    zip::ZipWriter::new(&mut *records_io)
-                                } else {
-                                    zip::ZipWriter::new_append(&mut *records_io)?
-                                };
-                                records_io.set_flush_on_finish_file(true);
-                                let start_record_id = buf_recv[0].1;
-                                let start_file = start_record_id / file_msg_count;
-                                // let path = dir.join(format!("R-{start_file}.txt"));
-                                // println!("buf_recv: {:#?} path: {path:?}", buf_recv.len());
-
-                                for (msg_bytes, record_index) in buf_recv.iter() {
-                                    records_io.start_file_from_path(
-                                        dir.join(format!("R-{record_index}.txt")),
-                                        SimpleFileOptions::default()
-                                            .compression_method(CompressionMethod::Zstd),
-                                    )?;
-                                    records_io.write_all(msg_bytes.as_ref())?;
-                                }
-                                // let file_end_index = (start_file + 1) * file_msg_count - 1;
-                                // if buf_recv.last().unwrap().1 > file_end_index {
-                                //     let next_file_count =
-                                //         buf_recv.last().unwrap().1 - file_end_index;
-                                //     for (msg_bytes, record_index) in
-                                //         &buf_recv[..(buf_recv.len() - next_file_count as usize)]
-                                //     {
-                                //         records_io.write_all(msg_bytes.as_ref())?;
-                                //         if *record_index != file_end_index {
-                                //             records_io.write_all(b"\r\n,\r\n")?;
-                                //         }
-                                //     }
-                                //     records_io.flush()?;
-                                //     records_io.start_file_from_path(
-                                //         dir.join(format!("R-{}.txt", start_file + 1)),
-                                //         SimpleFileOptions::default()
-                                //             .compression_method(CompressionMethod::Zstd),
-                                //     )?;
-                                //     let next_file_end_index = file_end_index + file_msg_count;
-                                //     for (msg_bytes, record_index) in
-                                //         &buf_recv[(buf_recv.len() - next_file_count as usize)..]
-                                //     {
-                                //         records_io.write_all(msg_bytes.as_ref())?;
-                                //         if *record_index != next_file_end_index {
-                                //             records_io.write_all(b"\r\n,\r\n")?;
-                                //         }
-                                //     }
-                                // } else {
-                                //     for (msg_bytes, record_index) in buf_recv.iter() {
-                                //         records_io.write_all(msg_bytes.as_ref())?;
-                                //         if *record_index != file_end_index {
-                                //             records_io.write_all(b"\r\n,\r\n")?;
-                                //         }
-                                //     }
-                                // }
-                                // records_io.flush()?;
-                                records_io.finish()?;
-
-                                Ok::<_, zip::result::ZipError>((dir, buf_recv))
-                            }
-                        })
-                        .await
-                        .unwrap()
-                        .unwrap();
-                        first = false;
-                    }
-                }
-                // app_run_data.last_record_index = record_index;
-                // app_run_data.end_pos = len;
-                // let compressed_len = {
-                //     let mut records_io = records_io.lock().await;
-                //     records_io
-                //         .get_mut()
-                //         .write_u64(app_run_data.last_record_index)
-                //         .await
-                //         .unwrap();
-                //     records_io
-                //         .get_mut()
-                //         .write_u64(bytes.chunk().len() as u64)
-                //         .await
-                //         .unwrap();
-                //     records_io.write_all(bytes.chunk()).await.unwrap();
-                // };
-                // // <num:8><json len:8><record json>
-                // len += (u64::BITS / 8) as u64
-                //     + (u64::BITS / 8) as u64
-                //     + bytes.chunk().len() as u64;
-                // serde_json::to_writer_pretty((&mut buf).writer(), &app_run_data).unwrap();
-                // app_run_data_file
-                //     .seek(SeekFrom::Start(app_run_data.start_pos))
-                //     .await
-                //     .unwrap();
-                // app_run_data_file.write_all(buf.chunk()).await.unwrap();
-                // app_run_data_file.flush().await.unwrap();
-                // buf.clear();
-                // if msg_pos_sender.send(MsgPosInfo { pos: len }).is_err() {
-                //     break;
-                // }
-            }
-        });*/
-        // tokio::spawn(async move {
-        //     let mut buf = Vec::with_capacity(1024 * 8);
-        //     while let Ok(msg_pos) = msg_pos_receiver.recv_async().await {
-        //         let mut records_io = records_io.lock().await;
-        //         let records_io = records_io.get_mut();
-        //         records_io.seek(SeekFrom::Start(msg_pos.pos)).await.unwrap();
-        //         let _ = records_io.read_u64().await;
-        //         let json_len = records_io.read_u64().await.unwrap();
-        //         buf.reserve(json_len as _);
-        //         records_io.read(&mut buf).await.unwrap();
-        //     }
-        // });
-        Self {
-            // total_size: Default::default(),
-            sender,
-        }
-    }
-}
-*/
 impl TracingLiveMsgSubscriber for EncodeBytesSubscriber {
     fn on_msg(&self, msg: TLMsg) {
         // println!("msg: {msg:#?}");

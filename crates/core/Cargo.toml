@@ -1,7 +1,7 @@
 [package]
 name = "tracing-lv-core"
-version = "0.0.1"
-edition = "2021"
+version = "0.0.2"
+edition = "2024"
 description = "Track your apps in real time"
 license = "MIT"
 repository = "https://github.com/ycysdf/tracing-live"
@@ -27,5 +27,6 @@ prost = "0.13"
 serde_json = { version = "1", features = ["alloc"], default-features = false }
 serde = { version = "1", features = ["derive", "alloc"], default-features = false }
 derive_more = { version = "1", features = ["from"], default-features = false }
+portable-atomic = "1.10"
 [build-dependencies]
 tonic-build = { version = "0.12", features = ["prost"], optional = true }
