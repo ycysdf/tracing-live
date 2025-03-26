@@ -10,7 +10,7 @@ use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 #[derive(Clone, Debug, PartialEq, ToSchema, Serialize, Deserialize)]
-pub enum TLValue {
+pub enum TLDbValue {
     Bool(Option<bool>),
     TinyInt(Option<i8>),
     SmallInt(Option<i16>),
@@ -46,31 +46,31 @@ pub enum TLValue {
     // Array(ArrayType, Option<Box<Vec<TLValue>>>),
 }
 
-impl From<TLValue> for Value {
-    fn from(value: TLValue) -> Self {
+impl From<TLDbValue> for Value {
+    fn from(value: TLDbValue) -> Self {
         match value {
-            TLValue::Bool(n) => Value::Bool(n),
-            TLValue::TinyInt(n) => Value::TinyInt(n),
-            TLValue::SmallInt(n) => Value::SmallInt(n),
-            TLValue::Int(n) => Value::Int(n),
-            TLValue::BigInt(n) => Value::BigInt(n),
-            TLValue::TinyUnsigned(n) => Value::TinyUnsigned(n),
-            TLValue::SmallUnsigned(n) => Value::SmallUnsigned(n),
-            TLValue::Unsigned(n) => Value::Unsigned(n),
-            TLValue::BigUnsigned(n) => Value::BigUnsigned(n),
-            TLValue::Float(n) => Value::Float(n),
-            TLValue::Double(n) => Value::Double(n),
-            TLValue::String(n) => Value::String(n),
-            TLValue::Char(n) => Value::Char(n),
-            TLValue::Bytes(n) => Value::Bytes(n),
-            TLValue::Json(n) => Value::Json(n),
-            TLValue::ChronoDate(n) => Value::ChronoDate(n),
-            TLValue::ChronoTime(n) => Value::ChronoTime(n),
-            TLValue::ChronoDateTime(n) => Value::ChronoDateTime(n),
-            TLValue::ChronoDateTimeUtc(n) => Value::ChronoDateTimeUtc(n),
-            TLValue::ChronoDateTimeLocal(n) => Value::ChronoDateTimeLocal(n),
-            TLValue::ChronoDateTimeWithTimeZone(n) => Value::ChronoDateTimeWithTimeZone(n),
-            TLValue::Uuid(n) => Value::Uuid(n),
+            TLDbValue::Bool(n) => Value::Bool(n),
+            TLDbValue::TinyInt(n) => Value::TinyInt(n),
+            TLDbValue::SmallInt(n) => Value::SmallInt(n),
+            TLDbValue::Int(n) => Value::Int(n),
+            TLDbValue::BigInt(n) => Value::BigInt(n),
+            TLDbValue::TinyUnsigned(n) => Value::TinyUnsigned(n),
+            TLDbValue::SmallUnsigned(n) => Value::SmallUnsigned(n),
+            TLDbValue::Unsigned(n) => Value::Unsigned(n),
+            TLDbValue::BigUnsigned(n) => Value::BigUnsigned(n),
+            TLDbValue::Float(n) => Value::Float(n),
+            TLDbValue::Double(n) => Value::Double(n),
+            TLDbValue::String(n) => Value::String(n),
+            TLDbValue::Char(n) => Value::Char(n),
+            TLDbValue::Bytes(n) => Value::Bytes(n),
+            TLDbValue::Json(n) => Value::Json(n),
+            TLDbValue::ChronoDate(n) => Value::ChronoDate(n),
+            TLDbValue::ChronoTime(n) => Value::ChronoTime(n),
+            TLDbValue::ChronoDateTime(n) => Value::ChronoDateTime(n),
+            TLDbValue::ChronoDateTimeUtc(n) => Value::ChronoDateTimeUtc(n),
+            TLDbValue::ChronoDateTimeLocal(n) => Value::ChronoDateTimeLocal(n),
+            TLDbValue::ChronoDateTimeWithTimeZone(n) => Value::ChronoDateTimeWithTimeZone(n),
+            TLDbValue::Uuid(n) => Value::Uuid(n),
         }
     }
 }
@@ -145,7 +145,6 @@ impl ApplyFilterOp for u64 {
     }
 }
 
-
 impl<'a> ApplyFilterOp for &'a str {
     fn apply_filter_op(&self, value: Self, op: TLBinOp) -> bool {
         match op {
@@ -186,9 +185,9 @@ pub enum TLExpr {
     Unary(TLUnOp, Box<TLExpr>),
     Binary(Box<TLExpr>, TLBinOp, Box<TLExpr>),
     Column(String),
-    Constant(TLValue),
-    Value(TLValue),
-    Values(Vec<TLValue>),
+    Constant(TLDbValue),
+    Value(TLDbValue),
+    Values(Vec<TLDbValue>),
     // Tuple(Vec<SimpleExpr>),
     // Unary(UnOper, Box<SimpleExpr>),
     // FunctionCall(FunctionCall),

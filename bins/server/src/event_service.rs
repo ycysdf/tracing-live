@@ -1,12 +1,10 @@
 use std::sync::Arc;
 use tracing::error;
 
-use crate::record::TracingRecordVariant;
+use crate::record::{AppRunInfo, TracingRecordVariant};
 use crate::running_app::AppRunRecord;
-use crate::tracing_service::{
-   TracingRecordFilter, TracingSpanRunDto, TracingTreeRecordVariantDto,
-};
 use crate::tracing_service::{TracingRecordDto, TracingTreeRecordDto};
+use crate::tracing_service::{TracingRecordFilter, TracingSpanRunDto, TracingTreeRecordVariantDto};
 
 #[derive(Default)]
 pub struct EventService {
@@ -26,20 +24,25 @@ impl EventService {
     }
     #[inline]
     pub async fn notify(
-       &mut self,
-       item: AppRunRecord,
-       variant_dto: Option<TracingTreeRecordVariantDto>,
+        &mut self,
+        item: AppRunRecord,
+        variant_dto: Option<TracingTreeRecordVariantDto>,
+        app_run_info: &AppRunInfo,
     ) {
         for x in self.record_event_senders.iter_mut() {
-            x.2 = item.variant.filter(&x.1)
+            x.2 = item.variant.filter(&x.1, app_run_info)
         }
-        let dto = item.into();
+        let dto = item.into_dto(app_run_info);
         let tree_record_dto = Arc::new(TracingTreeRecordDto::new(dto, variant_dto));
         for sender in self.record_event_senders.iter().filter(|n| n.2) {
             // println!("notify: {tree_record_dto:#?}");
-            let _ = sender.0.send_async(tree_record_dto.clone()).await.inspect_err(|err| {
-                error!("Failed to notify tracing of events: {}", err);
-            });
+            let _ = sender
+                .0
+                .send_async(tree_record_dto.clone())
+                .await
+                .inspect_err(|err| {
+                    error!("Failed to notify tracing of events: {}", err);
+                });
         }
     }
     pub fn add_record_watcher(

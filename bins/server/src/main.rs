@@ -5,51 +5,46 @@ use std::future::IntoFuture;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
 use tokio::net::TcpListener;
-use tonic::codec::CompressionEncoding;
-use tonic::transport::Server;
 use tower_http::compression::CompressionLayer;
-use tracing::{error, info_span, warn, Instrument};
+use tracing::{Instrument, error, info_span, warn};
 use tracing_lv_core::catch_panic::program_panic_catch;
-use tracing_lv_core::{
-    proto::tracing_service_server::TracingServiceServer,
-    proto::{record_param, RecordParam},
-    MsgReceiverSubscriber, TLAppInfo, TLAppInfoExt, TLLayer,
-};
+use tracing_lv_core::proto::{AppStartInfo, TLRecordVariant, TracingRecordItem};
+use tracing_lv_core::{MsgReceiverSubscriber, TLAppInfo, TLLayer};
+use tracing_lv_server::rpc_service::{AppRunLifetime, TracingServiceImpl};
 use tracing_lv_server::running_app::{
-    AppRunMsg, AppRunRecord, TLConfig, POSTGRESQL_MAX_BIND_PARAM_COUNT,
+    AppRunMsg, AppRunRecord, POSTGRESQL_MAX_BIND_PARAM_COUNT, TLConfig,
 };
 use tracing_lv_server::tracing_service::TracingRecordBatchInserter;
 use tracing_lv_server::{
-    build,
-    grpc_service::{AppRunLifetime, TracingServiceImpl},
-    running_app::RunMsg,
-    running_app::RunningApps,
-    tracing_service::TracingService,
-    web_service, RECORD_ID_GENERATOR, SELF_APP_ID,
+    RECORD_ID_GENERATOR, SELF_APP_ID, build, running_app::RunMsg, running_app::RunningApps,
+    tracing_service::TracingService, web_service,
 };
+use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
+use xy_rpc::formats::MessagePackFormat;
+use xy_rpc::tokio::ChannelBuilderTokioExt;
+use xy_rpc::{ChannelBuilder, XyRpcChannel};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let (self_record_sender, self_record_receiver) = flume::unbounded::<RecordParam>();
+    let (self_record_sender, self_record_receiver) = flume::unbounded::<TracingRecordItem>();
     tracing_subscriber::registry()
-        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-            format!(
+      .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+         format!(
             "warn,tracing_lv_core::catch_panic=info,{}=info,tower_http=debug,axum::rejection=trace,tracing_lv_server::running_app=warn",
             env!("CARGO_CRATE_NAME")
          )
             .into()
-        }))
-        .with(TLLayer {
-            subscriber: MsgReceiverSubscriber::new(self_record_sender),
-            enable_enter: false,
-            record_index: 1.into(),
-        })
-        .with(tracing_subscriber::fmt::layer().pretty())
-        .init();
+      }))
+      .with(TLLayer {
+         subscriber: MsgReceiverSubscriber::new(self_record_sender),
+         enable_enter: false,
+         record_index: 1.into(),
+      })
+      .with(tracing_subscriber::fmt::layer().pretty())
+      .init();
     program_panic_catch();
 
     let database_url = env::var("DATABASE_URL")
@@ -73,7 +68,7 @@ async fn main() -> anyhow::Result<()> {
                     TLAppInfo::new(SELF_APP_ID, "Tracing Live Server", build::PKG_VERSION)
                         .node_name("Server");
                 let (mut self_lifetime, app_run_record) = AppRunLifetime::new(
-                    app_info.into_app_start(Uuid::new_v4(), Duration::default()),
+                    AppStartInfo::from_app_info(app_info, Uuid::new_v4()),
                     tracing_service,
                     app_run_msg_sender,
                 )
@@ -84,18 +79,19 @@ async fn main() -> anyhow::Result<()> {
                     record_receiver: app_run_msg_receiver,
                 })?;
                 while let Ok(msg) = self_record_receiver.recv_async().await {
-                    let variant = msg.variant.unwrap();
-                    let record = if let record_param::Variant::AppStop(_) = variant {
-                        unreachable!("AppStop should not be sent to self_record_receiver");
-                    } else {
-                        self_lifetime.record(variant).await?
+                    let record_index = msg.variant.record_index();
+                    let record = match msg.variant {
+                        TLRecordVariant::TLMsg(msg) => self_lifetime.record(msg).await?,
+                        TLRecordVariant::AppStop { .. } => {
+                            unreachable!("AppStop should not be sent to self_record_receiver");
+                        }
                     };
                     if let Err(err) =
                         self_lifetime
                             .record_sender
                             .send(AppRunMsg::Record(AppRunRecord {
                                 id: RECORD_ID_GENERATOR.next(),
-                                record_index: msg.record_index as _,
+                                record_index: record_index as _,
                                 variant: record,
                             }))
                     {
@@ -176,7 +172,7 @@ async fn main() -> anyhow::Result<()> {
         .instrument(info_span!("axum http web server", ?addr))
     });
 
-    let grpc_serve_future = tokio::spawn({
+    let grpc_serve_future = tokio::spawn(async move{
         let addr = SocketAddr::from((
             Ipv4Addr::UNSPECIFIED,
             env::var("GRPC_PORT")
@@ -186,19 +182,36 @@ async fn main() -> anyhow::Result<()> {
                 .unwrap_or(8080),
         ));
         let span = info_span!("tonic grpc server", ?addr);
-        Server::builder()
-            .accept_http1(false)
-            .add_service(
-                TracingServiceServer::new(TracingServiceImpl::new(
-                    tracing_service,
-                    msg_sender,
-                    span.clone(),
-                ))
-                .accept_compressed(CompressionEncoding::Zstd)
-                .send_compressed(CompressionEncoding::Zstd),
-            )
-            .serve(addr)
-            .instrument(span)
+        let tcp_listener = TcpListener::bind(addr).await?;
+        while let Ok((stream, addr)) = tcp_listener.accept().await {
+            let (_channel, fut) = ChannelBuilder::new(tracing_lv_core::proto::FORMAT::default())
+                .only_serve({
+                    {
+                        let n = TracingServiceImpl {
+                            tracing_service: tracing_service.clone(),
+                            span: span.clone(),
+                            record_sender: msg_sender.clone(),
+                        };
+                        move |_channel: XyRpcChannel<MessagePackFormat>| n
+                    }
+                })
+                .build_from_tokio_read_write(stream.into_split());
+            tokio::spawn(fut);
+        }
+        anyhow::Ok(())
+        // Server::builder()
+        //     .accept_http1(false)
+        //     .add_service(
+        //         TracingServiceServer::new(TracingServiceImpl::new(
+        //             tracing_service,
+        //             msg_sender,
+        //             span.clone(),
+        //         ))
+        //         .accept_compressed(CompressionEncoding::Zstd)
+        //         .send_compressed(CompressionEncoding::Zstd),
+        //     )
+        //     .serve(addr)
+        //     .instrument(span)
     });
 
     Ok(tokio::select! {

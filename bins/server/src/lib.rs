@@ -10,7 +10,6 @@ use uuid::{uuid, Uuid};
 mod dyn_query;
 pub mod event_service;
 mod global_data;
-pub mod grpc_service;
 pub mod record;
 pub mod related_event;
 pub mod running_app;
@@ -18,6 +17,7 @@ mod setting_service;
 pub mod tracing_service;
 mod web_error;
 pub mod web_service;
+pub mod rpc_service;
 
 shadow!(build);
 

@@ -27,7 +27,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
-use tonic::codegen::tokio_stream::StreamExt;
 use tower::Service;
 use tower_http::classify::ServerErrorsFailureClass;
 use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer};
@@ -229,6 +228,7 @@ async fn records_subscribe(
     State((tracing_service, msg_sender)): State<(TracingService, flume::Sender<RunMsg>)>,
     Query(filter): Query<TracingRecordFilter>,
 ) -> Sse<impl Stream<Item = Result<sse::Event, Infallible>>> {
+   use futures::StreamExt;
     let mut records: Vec<_> = tracing_service
         .list_tree_records(filter.clone())
         .await

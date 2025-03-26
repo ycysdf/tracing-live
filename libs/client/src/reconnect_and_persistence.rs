@@ -7,12 +7,13 @@ use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::task::yield_now;
-use tonic::transport::Channel;
 use tracing::{error, warn};
 use tracing_lv_core::TracingLiveMsgSubscriber;
-use tracing_lv_core::proto::app_run_replay::Variant;
-use tracing_lv_core::proto::tracing_service_client::TracingServiceClient;
-use tracing_lv_core::proto::{AppStart, RecordParam, record_param};
+use tracing_lv_core::proto::{
+    AppStartInfo, TLRecordVariant, TracingRecordItem, TracingReplyVariant, TracingServiceCaller,
+    TracingServiceSchema,
+};
+use xy_rpc::XyRpcChannel;
 
 pub struct TLReconnectAndPersistenceSetting {
     pub records_writer: Arc<Mutex<dyn RWS + Send>>,
@@ -40,10 +41,10 @@ impl TLReconnectAndPersistenceSetting {
 }
 pub async fn reconnect_and_persistence(
     setting: TLReconnectAndPersistenceSetting,
-    msg_sender: flume::Sender<RecordParam>,
-    msg_receiver: flume::Receiver<RecordParam>,
-    mut app_start: AppStart,
-    mut client: TracingServiceClient<NoSubscriberService<Channel>>,
+    msg_sender: flume::Sender<TracingRecordItem>,
+    msg_receiver: flume::Receiver<TracingRecordItem>,
+    mut app_start: AppStartInfo,
+    channel: XyRpcChannel<tracing_lv_core::proto::FORMAT, TracingServiceSchema>,
 ) -> (
     Box<dyn TracingLiveMsgSubscriber>,
     impl Future<Output = ()> + Send + 'static,
@@ -60,7 +61,7 @@ pub async fn reconnect_and_persistence(
     }
     let (record_index_sender, record_index_receiver) = flume::unbounded::<RecordMsg>();
 
-    let run_id = u128::from_be_bytes(app_start.run_id.as_slice().try_into().unwrap());
+    let run_id = app_start.run_id.as_u128();
     let _read_file_and_send_task = {
         use bytes::Buf;
         let mut buf_recv = Vec::with_capacity(RECORD_BLOCK_SIZE);
@@ -187,14 +188,14 @@ pub async fn reconnect_and_persistence(
     };
 
     (Box::new(EncodeBytesSubscriber { sender }) as _, {
-        let msg_sender = msg_sender.clone();
+        // let msg_sender = msg_sender.clone();
         async move {
             let mut reconnect_times = 0;
             let mut reconnect_sender: Option<tokio::sync::oneshot::Sender<u64>> = None;
             'r: loop {
                 let r =
-                   client
-                      .app_run(futures_util::stream::unfold(
+                   channel
+                      .app_run(&app_start,futures_util::stream::unfold(
                           (
                               msg_receiver.clone(),
                               record_index_sender.clone(),
@@ -221,7 +222,7 @@ pub async fn reconnect_and_persistence(
                                   (param, app_stop, is_end)
                               } else {
                                   let param = msg_receiver.recv_async().await.ok()?;
-                                  if matches!(param.variant.as_ref().unwrap(),record_param::Variant::AppStop(_)) {
+                                  if matches!(param.variant,TLRecordVariant::AppStop{..}) {
                                       let mut app_stop = Some(param);
                                       yield_now().await;
                                       let (reply_sender, reply_receiver) =
@@ -242,9 +243,9 @@ pub async fn reconnect_and_persistence(
                                       (param, None, false)
                                   }
                               };
-                              param.send_time = Utc::now().timestamp_nanos_opt().unwrap();
+                              param.send_time = Utc::now();
                               Some((
-                                  param,
+                                  Ok(param),
                                   (msg_receiver, record_index_sender, app_stop, is_end),
                               ))
                           },
@@ -252,13 +253,16 @@ pub async fn reconnect_and_persistence(
                       .await;
                 match r {
                     Ok(mut record_param) => {
+                        let mut record_param = core::pin::pin!(record_param);
                         reconnect_times = 0;
-                        while let Some(reply) = record_param.get_mut().next().await {
+                        while let Some(reply) = record_param.next().await {
                             match reply {
-                                Ok(reply) => match reply.variant.unwrap() {
-                                    Variant::ReconnectReply(reply) => {
+                                Ok(reply) => match reply {
+                                    TracingReplyVariant::AppReconnectReply {
+                                        last_record_index,
+                                    } => {
                                         let sender = reconnect_sender.take().unwrap();
-                                        if sender.send(reply.last_record_index).is_err() {
+                                        if sender.send(last_record_index).is_err() {
                                             break;
                                         }
                                     }
@@ -276,15 +280,6 @@ pub async fn reconnect_and_persistence(
                                     }
                                     reconnect_sender = Some(sender);
                                     while msg_receiver.try_recv().is_ok() {}
-                                    msg_sender
-                                        .send(RecordParam {
-                                            send_time: Utc::now().timestamp_nanos_opt().unwrap(),
-                                            record_index: 0,
-                                            variant: Some(record_param::Variant::AppStart(
-                                                app_start.clone(),
-                                            )),
-                                        })
-                                        .unwrap();
                                     continue 'r;
                                 }
                             }

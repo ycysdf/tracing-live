@@ -10,12 +10,9 @@ repository = "https://github.com/ycysdf/tracing-live"
 default = []
 client = []
 server = []
-std = ["dep:tonic", "dep:flume", "chrono/now"]
-build-proto = ["dep:tonic-build"]
-build-proto-dev = ["build-proto"]
+std = ["dep:flume", "chrono/now", "xy-rpc/std", "xy-rpc/rt_tokio"]
 
 [dependencies]
-tonic = { version = "0.12", features = ["prost", "codegen", ], default-features = false, optional = true }
 chrono = { version = "0.4", features = ["serde"], default-features = false }
 uuid = { version = "1", features = ["v4"], default-features = false }
 flume = { version = "0.11", optional = true }
@@ -23,10 +20,10 @@ hashbrown = { version = "0.15", features = ["serde", "default-hasher"], default-
 smol_str = { version = "0.2", features = ["serde"], default-features = false }
 tracing = { version = "0.1", default-features = false }
 tracing-subscriber = { version = "0.3", default-features = false }
-prost = "0.13"
-serde_json = { version = "1", features = ["alloc"], default-features = false }
 serde = { version = "1", features = ["derive", "alloc"], default-features = false }
+serde_json = { version = "1", optional = true }
 derive_more = { version = "1", features = ["from"], default-features = false }
 portable-atomic = "1.10"
-[build-dependencies]
-tonic-build = { version = "0.12", features = ["prost"], optional = true }
+xy-rpc = { path = "../../../xy-rpc", features = ["rt_tokio", "format_message_pack"] }
+futures-util = { version = "0.3", default-features = false }
+bitflags = "2"

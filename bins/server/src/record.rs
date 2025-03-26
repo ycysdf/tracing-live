@@ -1,28 +1,27 @@
 use crate::dyn_query::ApplyFilterOp;
-use crate::grpc_service::{
-    RunningSpan, SpanFullInfo, SpanInfo, TracingFields, TracingServiceImpl, FIELD_DATA_SPAN_T_ID,
-};
+use crate::rpc_service::SpanFullInfo;
+use crate::running_app::CreatedSpan;
 use crate::tracing_service::{
     TracingLevel, TracingRecordDto, TracingRecordFieldFilter, TracingRecordFilter,
     TracingRecordScene, TracingTreeRecordDto,
 };
 use chrono::{DateTime, Local, Utc};
+use derive_more::{Deref, DerefMut, Display, From, FromStr};
 use entity::prelude::TracingRecord;
 use http_body_util::BodyExt;
 use serde::{Deserialize, Serialize};
 use smallvec::smallvec;
-use smol_str::{SmolStr, ToSmolStr};
+use smol_str::{SmolStr, ToSmolStr, format_smolstr};
+use std::borrow::Cow;
 use std::collections::HashMap;
-use std::str::FromStr;
 use std::sync::Arc;
-use tracing_lv_core::proto::{field_value, FieldValue, PosInfo};
+use tracing_lv_core::{SpanRawInfo, TracingFields, VxMetadata};
 use utoipa::ToSchema;
 use uuid::Uuid;
-use crate::running_app::CreatedSpan;
 
 pub type SpanId = Uuid;
 
-#[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Debug, ToSchema)]
+#[derive(Serialize, Deserialize, Display, FromStr, PartialEq, Eq, Clone, Debug, ToSchema)]
 pub enum TracingKind {
     SpanCreate,
     SpanEnter,
@@ -37,88 +36,162 @@ pub enum TracingKind {
     RelatedEvent,
 }
 
-impl FromStr for TracingKind {
-    type Err = ();
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(match s {
-            "SPAN_CREATE" => TracingKind::SpanCreate,
-            "SPAN_ENTER" => TracingKind::SpanEnter,
-            "SPAN_LEAVE" => TracingKind::SpanLeave,
-            "SPAN_CLOSE" => TracingKind::SpanClose,
-            "SPAN_RECORD" => TracingKind::SpanRecord,
-            "EVENT" => TracingKind::Event,
-            "REP_EVENT" => TracingKind::RepEvent,
-            "APP_START" => TracingKind::AppStart,
-            "APP_STOP" => TracingKind::AppStop,
-            "DATA_UPDATE" => TracingKind::DataUpdate,
-            "RELATED_EVENT" => TracingKind::RelatedEvent,
-            _ => return Err(()),
-        })
-    }
-}
-
 impl TracingKind {
     pub fn as_str(&self) -> &'static str {
         match self {
-            TracingKind::SpanCreate => "SPAN_CREATE",
-            TracingKind::SpanEnter => "SPAN_ENTER",
-            TracingKind::SpanLeave => "SPAN_LEAVE",
-            TracingKind::SpanClose => "SPAN_CLOSE",
-            TracingKind::SpanRecord => "SPAN_RECORD",
-            TracingKind::Event => "EVENT",
-            TracingKind::RepEvent => "REP_EVENT",
-            TracingKind::AppStart => "APP_START",
-            TracingKind::AppStop => "APP_STOP",
-            TracingKind::DataUpdate => "DATE_UPDATE",
-            TracingKind::RelatedEvent => "RELATED_EVENT",
+            Self::SpanCreate => "SpanCreate",
+            Self::SpanEnter => "SpanEnter",
+            Self::SpanLeave => "SpanLeave",
+            Self::SpanClose => "SpanClose",
+            Self::SpanRecord => "SpanRecord",
+            Self::Event => "Event",
+            Self::RepEvent => "RepEvent",
+            Self::AppStart => "AppStart",
+            Self::AppStop => "AppStop",
+            Self::DataUpdate => "DataUpdate",
+            Self::RelatedEvent => "RelatedEvent",
         }
+    }
+}
+
+pub trait SmolStrExt {
+    fn into_smol_str(self) -> SmolStr;
+}
+
+impl SmolStrExt for Cow<'static, str> {
+    fn into_smol_str(self) -> SmolStr {
+        match self {
+            Cow::Borrowed(n) => SmolStr::new_static(n),
+            Cow::Owned(n) => n.into(),
+        }
+    }
+}
+
+pub type TraceId = u64;
+
+#[derive(Deref, DerefMut, Debug, Clone)]
+pub struct TracingSpanInfo {
+    pub trace_id: TraceId,
+    pub parent_trace_id: Option<TraceId>,
+    pub parent_id: Option<SpanId>,
+    pub id: SpanId,
+    #[deref_mut]
+    #[deref]
+    pub tl_base: Arc<TLSpanInfo>,
+}
+
+#[derive(Debug)]
+pub struct TLSpanInfo {
+    pub name: SmolStr,
+    pub target: SmolStr,
+    pub level: TracingLevel,
+    pub module_path: SmolStr,
+    pub file: Option<SmolStr>,
+    pub line: Option<u32>,
+}
+
+impl From<SpanRawInfo> for TLSpanInfo {
+    fn from(value: SpanRawInfo) -> Self {
+        Self {
+            name: value.metadata.name.into_smol_str(),
+            target: value.metadata.target.into_smol_str(),
+            level: value.metadata.level.as_ref().try_into().unwrap(),
+            module_path: value
+                .metadata
+                .module_path
+                .map(|n| n.into_smol_str())
+                .unwrap_or(SmolStr::new_static("<UNKNOWN>")),
+            file: value.metadata.file.map(|n| n.into_smol_str()),
+            line: value.metadata.line,
+        }
+    }
+}
+impl TLSpanInfo {
+    pub fn file_line(&self) -> SmolStr {
+        format_smolstr!(
+            "{}:{}",
+            self.file.as_ref().map(|n| n.as_str()).unwrap_or("UNKNOWN"),
+            self.line.as_ref().unwrap_or(&0)
+        )
+    }
+}
+
+#[derive(Deref, DerefMut, Debug, Clone)]
+pub struct SpanRecordItem {
+    pub record_index: u64,
+    #[deref_mut]
+    #[deref]
+    pub span: TracingSpanInfo,
+    pub fields: TracingFields,
+    pub record_date: DateTime<Utc>,
+    pub span_parent: Option<TracingSpanInfo>,
+}
+
+#[derive(Clone, Debug)]
+pub struct EventRecordItem {
+    pub fields: TracingFields,
+    pub record_date: DateTime<Utc>,
+    pub message: SmolStr,
+    pub span: Option<TracingSpanInfo>,
+    pub target: SmolStr,
+    pub level: TracingLevel,
+    pub module_path: SmolStr,
+    pub file: Option<SmolStr>,
+    pub line: Option<u32>,
+    pub record_index: u64,
+    pub is_related_event: bool,
+    pub is_repeated_event: bool,
+}
+
+impl EventRecordItem {
+    pub fn file_line(&self) -> SmolStr {
+        format_smolstr!(
+            "{}:{}",
+            self.file.as_ref().map(|n| n.as_str()).unwrap_or("UNKNOWN"),
+            self.line.as_ref().unwrap_or(&0)
+        )
     }
 }
 
 #[derive(Clone, Debug)]
 pub enum TracingRecordVariant {
     SpanCreate {
-        name: SmolStr,
-        parent_span_info: Option<Arc<SpanInfo>>,
-        info: SpanFullInfo,
+        span_item: SpanRecordItem,
     },
     SpanEnter {
-        info: SpanFullInfo,
+        span: TracingSpanInfo,
+        record_date: DateTime<Utc>,
+        record_index: u64,
     },
     SpanLeave {
-        info: SpanFullInfo,
+        span: TracingSpanInfo,
+        record_date: DateTime<Utc>,
+        record_index: u64,
     },
     SpanClose {
-        info: SpanFullInfo,
+        span: TracingSpanInfo,
+        record_date: DateTime<Utc>,
+        record_index: u64,
     },
     SpanRecord {
-        info: SpanFullInfo,
+        span: TracingSpanInfo,
+        fields: TracingFields,
+        record_date: DateTime<Utc>,
+        record_index: u64,
     },
     Event {
-        record_time: DateTime<Utc>,
-        app_info: Arc<AppRunInfo>,
-        message: SmolStr,
-        span_info: Option<Arc<SpanInfo>>,
-        running_span: Option<RunningSpan>,
-        fields: TracingFields,
-        target: SmolStr,
-        module_path: Option<SmolStr>,
-        file_line: Option<SmolStr>,
-        level: tracing_lv_core::proto::Level,
-        is_repeated_event: bool,
-        is_related_event: bool,
+        event_item: EventRecordItem,
     },
     AppStart {
-        record_time: DateTime<Utc>,
+        record_date: DateTime<Utc>,
         app_info: Arc<AppRunInfo>,
         name: SmolStr,
         fields: TracingFields,
         reconnect: bool,
-        created_spans: hashbrown::HashMap<u64,CreatedSpan>
+        created_spans: hashbrown::HashMap<u64, CreatedSpan>,
     },
     AppStop {
-        record_time: DateTime<Utc>,
+        record_date: DateTime<Utc>,
         app_info: Arc<AppRunInfo>,
         name: SmolStr,
         exception_end: bool,
@@ -160,10 +233,8 @@ impl TracingRecordVariant {
     //     }
     // }
 
-
     #[inline]
-    pub fn filter(&self, filter: &TracingRecordFilter) -> bool {
-        let app_info = self.app_info();
+    pub fn filter(&self, filter: &TracingRecordFilter,app_info: &AppRunInfo) -> bool {
         if let Some(scene) = &filter.scene {
             match scene {
                 TracingRecordScene::Tree => {
@@ -216,13 +287,17 @@ impl TracingRecordVariant {
         }
         if let Some(parent_id) = &filter.parent_id {
             let me_parent_id = if let TracingRecordVariant::Event {
-                is_related_event,
-                running_span: Some(running_span),
+                event_item:
+                    EventRecordItem {
+                        is_related_event,
+                        span: Some(span_info),
+                        ..
+                    },
                 ..
             } = &self
             {
                 if *is_related_event {
-                    running_span.parent
+                    span_info.parent_id
                 } else {
                     self.parent_id()
                 }
@@ -241,18 +316,22 @@ impl TracingRecordVariant {
         }
         if let Some(parent_span_t_ids) = &filter.parent_span_t_ids {
             let parent_span_t_id = if let TracingRecordVariant::Event {
-                is_related_event,
-                running_span: Some(running_span),
+                event_item:
+                    EventRecordItem {
+                        is_related_event,
+                        span: Some(span_info),
+                        ..
+                    },
                 ..
             } = &self
             {
                 if *is_related_event {
-                    running_span.parent_span_t_id
+                    span_info.parent_trace_id
                 } else {
-                    self.parent_span_t_id()
+                    self.parent_span_trace_id()
                 }
             } else {
-                self.parent_span_t_id()
+                self.parent_span_trace_id()
             };
             if let Some(parent_id) = parent_span_t_id {
                 if !parent_span_t_ids.is_empty() && !parent_span_t_ids.contains(&parent_id) {
@@ -265,8 +344,8 @@ impl TracingRecordVariant {
             }
         }
         if let Some(kinds) = &filter.kinds {
-            let kind = self.kind().as_str();
-            if !kinds.is_empty() && !kinds.iter().any(|n| n.as_str() == kind) {
+            let kind = self.kind();
+            if !kinds.is_empty() && !kinds.iter().any(|n| n == &kind) {
                 return false;
             }
         }
@@ -342,16 +421,21 @@ impl TracingRecordVariant {
     #[inline(always)]
     pub fn fields(&self) -> Option<&TracingFields> {
         match self {
-            TracingRecordVariant::Event { fields, .. } => Some(fields),
-            _ => self.span_full_info().map(|n| &n.fields),
+            TracingRecordVariant::Event { event_item, .. } => Some(&event_item.fields),
+            TracingRecordVariant::AppStart { fields, .. } => Some(fields),
+            TracingRecordVariant::SpanCreate { span_item } => Some(&span_item.fields),
+            TracingRecordVariant::SpanRecord { fields, .. } => Some(fields),
+            _ => None,
         }
     }
     #[inline(always)]
     pub fn fields_mut(&mut self) -> Option<&mut TracingFields> {
         match self {
-            TracingRecordVariant::Event { fields, .. } => Some(fields),
+            TracingRecordVariant::Event { event_item, .. } => Some(&mut event_item.fields),
             TracingRecordVariant::AppStart { fields, .. } => Some(fields),
-            _ => self.span_full_info_mut().map(|n| &mut n.fields),
+            TracingRecordVariant::SpanCreate { span_item } => Some(&mut span_item.fields),
+            TracingRecordVariant::SpanRecord { fields, .. } => Some(fields),
+            _ => None,
         }
     }
 
@@ -384,7 +468,7 @@ impl TracingRecordVariant {
                     unreachable!()
                 };
                 let fields1 = TracingFields::new(
-                    json_fields.into_iter().map(|n| (n.0, n.1.into())).collect(),
+                    json_fields.into_iter().map(|n| (n.0.into(), n.1.try_into().unwrap())).collect(),
                 );
                 (r, Some(fields1))
             }
@@ -400,10 +484,13 @@ impl TracingRecordVariant {
             TracingRecordVariant::SpanClose { .. } => TracingKind::SpanClose,
             TracingRecordVariant::SpanRecord { .. } => TracingKind::SpanRecord,
             TracingRecordVariant::Event {
-                is_repeated_event,
-                is_related_event,
-                ..
-            } => match (is_related_event, is_repeated_event) {
+                event_item:
+                    EventRecordItem {
+                        is_repeated_event,
+                        is_related_event,
+                        ..
+                    },
+            } => match (*is_related_event, *is_repeated_event) {
                 (true, _) => TracingKind::RelatedEvent,
                 (false, true) => TracingKind::RepEvent,
                 (false, false) => TracingKind::Event,
@@ -415,110 +502,106 @@ impl TracingRecordVariant {
     #[inline(always)]
     pub fn record_time(&self) -> DateTime<Utc> {
         match self {
-            TracingRecordVariant::Event { record_time, .. } => record_time.clone(),
-            TracingRecordVariant::AppStart { record_time, .. } => record_time.clone(),
-            TracingRecordVariant::AppStop { record_time, .. } => record_time.clone(),
-            n => n.span_full_info().unwrap().record_time.clone(),
+            TracingRecordVariant::Event { event_item, .. } => event_item.record_date.clone(),
+            TracingRecordVariant::AppStart { record_date, .. } => record_date.clone(),
+            TracingRecordVariant::AppStop { record_date, .. } => record_date.clone(),
+            TracingRecordVariant::SpanCreate { span_item, .. } => span_item.record_date.clone(),
+            TracingRecordVariant::SpanEnter { record_date, .. } => record_date.clone(),
+            TracingRecordVariant::SpanLeave { record_date, .. } => record_date.clone(),
+            TracingRecordVariant::SpanClose { record_date, .. } => record_date.clone(),
+            TracingRecordVariant::SpanRecord { record_date, .. } => record_date.clone(),
         }
     }
 
     #[inline(always)]
     pub fn name(&self) -> &SmolStr {
         match &self {
-            TracingRecordVariant::Event { message, .. } => message,
+            TracingRecordVariant::Event { event_item, .. } => &event_item.message,
             TracingRecordVariant::AppStart { name, .. } => name,
             TracingRecordVariant::AppStop { name, .. } => name,
-            _ => &self.span_full_info().unwrap().cache_id.name,
+            _ => &self.span_info().unwrap().name,
         }
     }
 
     #[inline(always)]
-    pub fn span_info(&self) -> Option<&SpanInfo> {
+    pub fn span_info(&self) -> Option<&TracingSpanInfo> {
         Some(match self {
-            TracingRecordVariant::Event { span_info, .. } => span_info.as_ref()?,
-            n => n.span_full_info()?.span_info.as_ref(),
-        })
-    }
-    #[inline(always)]
-    pub fn span_full_info(&self) -> Option<&SpanFullInfo> {
-        Some(match self {
-            TracingRecordVariant::SpanCreate { info, .. } => &info,
-            TracingRecordVariant::SpanEnter { info, .. } => &info,
-            TracingRecordVariant::SpanLeave { info, .. } => &info,
-            TracingRecordVariant::SpanClose { info, .. } => &info,
-            TracingRecordVariant::SpanRecord { info, .. } => &info,
+            TracingRecordVariant::SpanCreate { span_item, .. } => &span_item,
+            TracingRecordVariant::SpanEnter { span, .. } => &span,
+            TracingRecordVariant::SpanLeave { span, .. } => &span,
+            TracingRecordVariant::SpanClose { span, .. } => &span,
+            TracingRecordVariant::SpanRecord { span, .. } => &span,
+            TracingRecordVariant::Event { event_item, .. } => event_item.span.as_ref()?,
             _ => return None,
         })
     }
     #[inline(always)]
-    pub fn span_full_info_mut(&mut self) -> Option<&mut SpanFullInfo> {
+    pub fn span_info_mut(&mut self) -> Option<&mut TracingSpanInfo> {
         Some(match self {
-            TracingRecordVariant::SpanCreate { info, .. } => info,
-            TracingRecordVariant::SpanEnter { info, .. } => info,
-            TracingRecordVariant::SpanLeave { info, .. } => info,
-            TracingRecordVariant::SpanClose { info, .. } => info,
-            TracingRecordVariant::SpanRecord { info, .. } => info,
+            TracingRecordVariant::SpanCreate { span_item, .. } => span_item,
+            TracingRecordVariant::SpanEnter { span, .. } => span,
+            TracingRecordVariant::SpanLeave { span, .. } => span,
+            TracingRecordVariant::SpanClose { span, .. } => span,
+            TracingRecordVariant::SpanRecord { span, .. } => span,
+            TracingRecordVariant::Event { event_item, .. } => event_item.span.as_mut()?,
             _ => return None,
         })
     }
-    #[inline(always)]
-    pub fn app_info(&self) -> &Arc<AppRunInfo> {
-        match self {
-            TracingRecordVariant::SpanCreate { info, .. } => &info.app_info,
-            TracingRecordVariant::SpanEnter { info, .. } => &info.app_info,
-            TracingRecordVariant::SpanLeave { info, .. } => &info.app_info,
-            TracingRecordVariant::SpanClose { info, .. } => &info.app_info,
-            TracingRecordVariant::SpanRecord { info, .. } => &info.app_info,
-            TracingRecordVariant::Event { app_info, .. } => app_info,
-            TracingRecordVariant::AppStart { app_info, .. } => app_info,
-            TracingRecordVariant::AppStop { app_info, .. } => app_info,
-        }
-    }
+    // #[inline(always)]
+    // pub fn app_info(&self) -> &Arc<AppRunInfo> {
+    //     match self {
+    //         TracingRecordVariant::SpanCreate { info, .. } => &info.app_info,
+    //         TracingRecordVariant::SpanEnter { info, .. } => &info.app_info,
+    //         TracingRecordVariant::SpanLeave { info, .. } => &info.app_info,
+    //         TracingRecordVariant::SpanClose { info, .. } => &info.app_info,
+    //         TracingRecordVariant::SpanRecord { info, .. } => &info.app_info,
+    //         TracingRecordVariant::Event { app_info, .. } => app_info,
+    //         TracingRecordVariant::AppStart { app_info, .. } => app_info,
+    //         TracingRecordVariant::AppStop { app_info, .. } => app_info,
+    //     }
+    // }
     #[inline(always)]
     pub fn span_t_id(&self) -> Option<u64> {
-        Some(match self {
-            TracingRecordVariant::Event { span_info, .. } => span_info.as_ref()?.t_id,
-            n => n.span_full_info()?.t_id,
-        })
+        Some(self.span_info()?.trace_id)
     }
 
     #[inline(always)]
-    pub fn parent_span_t_id(&self) -> Option<u64> {
+    pub fn parent_span_trace_id(&self) -> Option<u64> {
         Some(match self {
-            TracingRecordVariant::Event { span_info, .. } => span_info.as_ref()?.t_id,
-            _ => self.span_full_info()?.running_span.parent_span_t_id?,
+            TracingRecordVariant::Event { event_item, .. } => event_item.span.as_ref()?.trace_id,
+            _ => self.span_info()?.trace_id,
         })
     }
     #[inline(always)]
     pub fn span_id(&self) -> Option<Uuid> {
-        self.span_full_info().map(|n| n.running_span.id.clone())
+        self.span_info().map(|n| n.id.clone())
     }
     #[inline(always)]
     pub fn target(&self) -> Option<&SmolStr> {
         Some(match self {
-            TracingRecordVariant::Event { target, .. } => target,
-            n => return n.span_full_info()?.running_span.target.as_ref(),
+            TracingRecordVariant::Event { event_item, .. } => &event_item.target,
+            n => &n.span_info()?.target,
         })
     }
     #[inline(always)]
-    pub fn file_line(&self) -> Option<&SmolStr> {
-        match self {
-            TracingRecordVariant::Event { file_line, .. } => file_line.as_ref(),
-            n => Some(&n.span_full_info()?.cache_id.file_line),
-        }
+    pub fn file_line(&self) -> Option<SmolStr> {
+        Some(match self {
+            TracingRecordVariant::Event { event_item, .. } => event_item.file_line(),
+            n => n.span_info()?.file_line(),
+        })
     }
     #[inline(always)]
     pub fn module_path(&self) -> Option<&SmolStr> {
-        match self {
-            TracingRecordVariant::Event { module_path, .. } => module_path.as_ref(),
-            n => Some(&n.span_full_info()?.module_path),
-        }
+        Some(match self {
+            TracingRecordVariant::Event { event_item, .. } => &event_item.module_path,
+            n => &n.span_info()?.module_path,
+        })
     }
     #[inline(always)]
     pub fn level(&self) -> Option<TracingLevel> {
         Some(match self {
-            TracingRecordVariant::Event { level, .. } => level.clone().into(),
-            n => return n.span_full_info()?.running_span.level?.clone().into(),
+            TracingRecordVariant::Event { event_item, .. } => event_item.level.clone(),
+            n => return Some(n.span_info()?.level.clone()),
         })
     }
 
@@ -526,8 +609,8 @@ impl TracingRecordVariant {
     #[inline(always)]
     pub fn parent_id(&self) -> Option<SpanId> {
         Some(match self {
-            TracingRecordVariant::Event { running_span, .. } => running_span.as_ref()?.id,
-            n => return n.span_full_info()?.running_span.parent.clone(),
+            TracingRecordVariant::Event { event_item, .. } => event_item.span.as_ref()?.id,
+            n => return n.span_info()?.parent_id.clone(),
         })
     }
 }
@@ -546,15 +629,4 @@ pub struct SpanCacheId {
     pub app_version: SmolStr,
     pub name: SmolStr,
     pub file_line: SmolStr,
-}
-
-impl SpanCacheId {
-    pub fn new(app_info: &AppRunInfo, span_info: tracing_lv_core::proto::SpanInfo) -> Self {
-        Self {
-            app_id: app_info.id,
-            app_version: app_info.version.clone(),
-            name: span_info.name.into(),
-            file_line: span_info.file_line.into(),
-        }
-    }
 }

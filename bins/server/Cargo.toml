@@ -14,14 +14,15 @@ mime_guess = "2"
 bitflags = "2"
 tokio = { version = "1", features = ["rt-multi-thread"] }
 tokio-util = { version = "0.7", features = ["time"] }
-tracing-lv-core = { path = "../../crates/core", features = ["server","std"], version = "0.0.2" }
+tracing-lv-core = { path = "../../crates/core", features = ["server", "std", "serde_json"], version = "0.0.2" }
 axum = { version = "0.7", features = ["http2", "json", "form", "multipart", "query", "tracing", "tokio", "tower-log", "matched-path"], default-features = false }
 axum-server = { version = "0.7", features = ["tls-rustls-no-provider"] }
-tonic = { version = "0.12", features = ["server", "zstd"] }
+#tonic = { version = "0.12", features = ["server", "zstd"] }
 tonic-web = { version = "0.12" }
 #tonic-health = { version = "0.12" }
 #prost = "0.13"
 #prost-types = "0.13"
+num_enum = "0.7"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["trace", "tracing", "cors", "compression-full", "decompression-full"] }
 #tokio-postgres = { version = "0.7", features = ["with-chrono-0_4", "with-uuid-1", "with-serde_json-1"] }
@@ -59,7 +60,8 @@ bon = "3"
 #utoipa-scalar = { version = "0.2", features = ["axum"] }
 
 shadow-rs = "0.37"
-log = "0.4.22"
+
+xy-rpc = { path = "../../../xy-rpc", features = ["rt_tokio"] }
 
 [build-dependencies]
 shadow-rs = "0.37"

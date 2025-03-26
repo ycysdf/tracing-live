@@ -1,17 +1,13 @@
+use crate::RECORD_ID_GENERATOR;
 use crate::event_service::EventService;
 use crate::global_data::GLOBAL_DATA;
-use crate::grpc_service::{
-    SpanFullInfo, SpanFullInfoBase, SpanInfo, TracingFields, TracingRecordFlags,
-    TracingServiceImpl, FIELD_DATA_EMPTY_CHILDREN, FIELD_DATA_FIRST_EVENT, FIELD_DATA_FLAGS,
-    FIELD_DATA_IS_CONTAINS_RELATED, FIELD_DATA_REPEATED_COUNT,
-};
-use crate::record::{AppRunInfo, SpanId, TracingKind, TracingRecordVariant};
+use crate::record::{AppRunInfo, SpanId, TracingKind, TracingRecordVariant, TracingSpanInfo};
 use crate::tracing_service::{
-    AppRunDto, TracingRecordBatchInserter, TracingRecordDto, TracingRecordFilter, TracingService,
-    TracingSpanEnterDto, TracingSpanRunDto, TracingTreeRecordDto, TracingTreeRecordVariantDto,
+    AppRunDto, TracingLevel, TracingRecordBatchInserter, TracingRecordDto, TracingRecordFilter,
+    TracingService, TracingSpanDto, TracingSpanEnterDto, TracingSpanRunDto, TracingTreeRecordDto,
+    TracingTreeRecordVariantDto,
 };
-use crate::RECORD_ID_GENERATOR;
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use chrono::{DateTime, Local, Utc};
 use derive_more::Deref;
 use futures_util::{StreamExt, TryStreamExt};
@@ -20,7 +16,7 @@ use sea_orm::sqlx::error::BoxDynError;
 use sea_orm::sqlx::postgres::{PgArguments, PgQueryResult, PgRow};
 use sea_orm::sqlx::{Arguments, Encode, Error, Postgres, Row, Type};
 use sea_orm::{
-    sqlx, ConnectionTrait, DatabaseBackend, DatabaseConnection, DbErr, ExecResult, Statement,
+    ConnectionTrait, DatabaseBackend, DatabaseConnection, DbErr, ExecResult, Statement, sqlx,
 };
 use smallvec::SmallVec;
 use smol_str::{SmolStr, ToSmolStr};
@@ -34,16 +30,14 @@ use std::{env, mem};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio::{join, try_join};
-use tonic::Status;
 use tracing::{error, info, warn};
-use tracing_lv_core::proto;
-use tracing_lv_core::proto::FieldValue;
+use tracing_lv_core::{TracingFields, proto};
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub struct EnteredSpan {
     pub id: Uuid,
-    pub record_time: DateTime<Utc>,
+    pub record_date: DateTime<Utc>,
     pub record_id: i64,
 }
 
@@ -51,10 +45,11 @@ pub struct EnteredSpan {
 pub struct CreatedSpan {
     pub id: Uuid,
     #[deref]
-    pub span_base_info: Arc<SpanFullInfoBase>,
+    pub base: TracingSpanInfo,
     pub total_enter_duration: chrono::Duration,
     pub enter_span: Option<EnteredSpan>,
     pub record_id: i64,
+    pub record_date: DateTime<Utc>,
     pub record_index: i64,
     // 存储字段，合并通知字段更新
     pub last_record_filed_id: Option<(i64, TracingFields)>,
@@ -80,15 +75,15 @@ pub struct AppRunRecord {
     pub variant: TracingRecordVariant,
 }
 
-impl Into<TracingRecordDto> for AppRunRecord {
-    fn into(mut self) -> TracingRecordDto {
+impl AppRunRecord {
+    pub fn into_dto(mut self, app_info: &AppRunInfo) -> TracingRecordDto {
         TracingRecordDto {
             id: self.id,
             record_index: self.record_index,
-            app_id: self.variant.app_info().id,
-            app_version: self.variant.app_info().version.clone(),
-            app_run_id: self.variant.app_info().run_id,
-            node_id: self.variant.app_info().node_id.clone(),
+            app_id: app_info.id,
+            app_version: app_info.version.clone(),
+            app_run_id: app_info.run_id,
+            node_id: app_info.node_id.clone(),
             name: self.variant.name().clone(),
             kind: self.variant.kind(),
             level: self.variant.level(),
@@ -99,22 +94,25 @@ impl Into<TracingRecordDto> for AppRunRecord {
                     .map(|n| mem::take(n).into_json_map())
                     .unwrap_or_default(),
             ),
-            span_id_is_stable: self
-                .variant
-                .span_full_info()
-                .map(|n| n.fields.stable_span_id().is_some()),
+            span_id_is_stable: self.variant.fields().map(|n| n.stable_span_id().is_some()),
             record_time: self.variant.record_time().fixed_offset(),
             target: self.variant.target().cloned(),
             module_path: self.variant.module_path().cloned(),
-            position_info: self.variant.file_line().cloned(),
+            position_info: self.variant.file_line(),
             creation_time: Utc::now().fixed_offset(),
             parent_id: self.variant.parent_id(),
             span_t_id: self.variant.span_t_id().map(|n| n.to_smolstr()),
-            parent_span_t_id: self.variant.parent_span_t_id().map(|n| n.to_smolstr()),
+            parent_span_t_id: self.variant.parent_span_trace_id().map(|n| n.to_smolstr()),
             repeated_count: None,
         }
     }
 }
+// impl Into<TracingRecordDto> for AppRunRecord {
+//     fn into(mut self) -> TracingRecordDto {
+//         TracingRecordDto {
+//         }
+//     }
+// }
 
 pub enum AppRunMsg {
     Record(AppRunRecord),
@@ -231,7 +229,7 @@ impl RunningApps {
                 } => {
                     let future = async {
                         let TracingRecordVariant::AppStart {
-                            record_time,
+                            record_date,
                             app_info,
                             name,
                             fields,
@@ -241,6 +239,7 @@ impl RunningApps {
                         else {
                             unreachable!()
                         };
+                        let app_info = app_info.clone();
 
                         let app_run_dto = if !*reconnect {
                             self.tracing_service
@@ -248,8 +247,8 @@ impl RunningApps {
                                     app_run_record.id,
                                     app_run_record.record_index,
                                     name.to_string(),
-                                    record_time.fixed_offset(),
-                                    TracingKind::AppStart.as_str().into(),
+                                    record_date.fixed_offset(),
+                                    TracingKind::AppStart.to_string(),
                                     None,
                                     None,
                                     None,
@@ -269,7 +268,7 @@ impl RunningApps {
                                 .insert_app_run(
                                     app_info.clone(),
                                     fields.clone().into_json_value(),
-                                    record_time.fixed_offset(),
+                                    record_date.fixed_offset(),
                                     app_run_record.id as _,
                                 )
                                 .await?
@@ -279,9 +278,9 @@ impl RunningApps {
                                     RECORD_ID_GENERATOR.next(),
                                     -1,
                                     name.to_string(),
-                                    record_time.fixed_offset(),
-                                    TracingKind::Event.as_str().into(),
-                                    Some(proto::Level::Warn),
+                                    record_date.fixed_offset(),
+                                    TracingKind::Event.to_string(),
+                                    Some(TracingLevel::Warn),
                                     None,
                                     None,
                                     Some(fields.clone().into_json_value()),
@@ -301,16 +300,16 @@ impl RunningApps {
                         };
 
                         let created_spans = mem::take(created_spans);
-                        anyhow::Ok((app_run_record, app_run_dto, created_spans))
+                        anyhow::Ok((app_run_record, app_info, app_run_dto, created_spans))
                     };
                     match future.await {
-                        Ok((app_run_record, app_run_dto, created_spans)) => {
-                            let app_info = app_run_record.variant.app_info().clone();
+                        Ok((app_run_record, app_info, app_run_dto, created_spans)) => {
                             event_service.clear_disconnected();
                             event_service
                                 .notify(
                                     app_run_record,
                                     Some(TracingTreeRecordVariantDto::AppRun(app_run_dto)),
+                                    &app_info,
                                 )
                                 .await;
 
@@ -344,7 +343,7 @@ impl RunningApps {
                 }
                 RunMsg::AppStop { app_run_record } => {
                     let TracingRecordVariant::AppStop {
-                        record_time,
+                        record_date: record_time,
                         app_info,
                         name: _,
                         exception_end,
@@ -352,6 +351,7 @@ impl RunningApps {
                     else {
                         unreachable!()
                     };
+                    let app_info = app_info.clone();
                     let run_id = app_info.run_id;
 
                     if let Ok(app_run_dto) = self
@@ -372,6 +372,7 @@ impl RunningApps {
                             .notify(
                                 app_run_record,
                                 Some(TracingTreeRecordVariantDto::AppRun(app_run_dto)),
+                                &app_info,
                             )
                             .await;
                     }
@@ -433,7 +434,7 @@ impl RunningApp {
         &mut self,
         span_t_id: u64,
         batch_inserter: &mut SqlBatchExecutor,
-        record_time: DateTime<Utc>,
+        record_date: DateTime<Utc>,
     ) -> Result<(), std::fmt::Error> {
         let Some(created_span) = self.get_created_span_mut(span_t_id) else {
             return Ok(());
@@ -441,8 +442,8 @@ impl RunningApp {
 
         let sub_span_t_ids = mem::take(&mut created_span.sub_span_t_ids);
         for (sub_span_t_id, id, _) in sub_span_t_ids.iter().filter(|n| !n.2) {
-            set_exception_end_for_span_run(id, batch_inserter, record_time)?;
-            self.set_exception_end_for_sub_spans(*sub_span_t_id, batch_inserter, record_time)?;
+            set_exception_end_for_span_run(id, batch_inserter, record_date)?;
+            self.set_exception_end_for_sub_spans(*sub_span_t_id, batch_inserter, record_date)?;
         }
         Ok(())
     }
@@ -695,7 +696,7 @@ impl RunningApp {
                         let level = record.variant.level();
                         let span_id = record.variant.span_id();
                         let parent_id = record.variant.parent_id();
-                        let parent_span_t_id = record.variant.parent_span_t_id();
+                        let parent_span_t_id = record.variant.parent_span_trace_id();
 
                         // debug_assert_eq!(*record_index, self.record_batch_inserter.id);
                         record
@@ -704,7 +705,6 @@ impl RunningApp {
                                 let target = n.target();
                                 let module_path = n.module_path();
                                 let file_line = n.file_line();
-                                let app_info = n.app_info();
                                 self.record_batch_inserter.append_insert_record(
                                     record.id,
                                     record.record_index,
@@ -718,8 +718,8 @@ impl RunningApp {
                                     json_fields.as_ref(),
                                     target.map(|n| n.as_str()),
                                     module_path.map(|n| n.as_str()),
-                                    file_line.map(|n| n.as_str()),
-                                    app_info.as_ref(),
+                                    file_line.as_ref().map(|n| n.as_str()),
+                                    self.app_info.as_ref(),
                                 )
                             })
                             .map_err(|n| anyhow!("{n:?}"))?;
@@ -727,43 +727,40 @@ impl RunningApp {
 
                     self.dto_buf.reserve_exact(buf_records_2.len());
                     while let Some(mut record) = buf_records_2.pop_front() {
-                        let app_info = record.variant.app_info().clone();
+                        // let app_info = record.variant.app_info().clone();
                         let r = match &mut record.variant {
-                            TracingRecordVariant::SpanCreate { info, .. } => {
+                            TracingRecordVariant::SpanCreate { span_item, .. } => {
                                 // println!("SpanCrate: {}. record_index: {}",info.span_info.t_id,record.record_index);
                                 if let Some(_previous) = self.created_spans.insert(
-                                    info.span_info.t_id,
+                                    span_item.trace_id,
                                     CreatedSpan {
                                         id: Uuid::new_v4(),
                                         total_enter_duration: Default::default(),
                                         enter_span: None,
                                         record_id: record.record_index,
+                                        record_date: span_item.record_date,
                                         record_index: record.record_index,
                                         last_record_filed_id: None,
                                         // last_repeated_event: None,
-                                        span_base_info: info.base.clone(),
+                                        base: span_item.span.clone(),
                                         sub_span_t_ids: Default::default(),
                                     },
                                 ) {
-                                    warn!(
-                                        "app {} span_t_id {} already created!",
-                                        info.app_info.run_id, info.span_info.t_id
-                                    );
+                                    warn!(?span_item, "span already created!");
                                 }
-                                let Some(created_span) = self.get_created_span_mut(info.t_id)
+                                let Some(created_span) =
+                                    self.get_created_span_mut(span_item.trace_id)
                                 else {
                                     continue;
                                 };
                                 let created_span_id = created_span.id;
 
-                                if let Some(parent_span_t_id) =
-                                    created_span.running_span.parent_span_t_id
-                                {
+                                if let Some(parent_span_t_id) = created_span.parent_trace_id {
                                     if let Some(created_span) =
                                         self.get_created_span_mut(parent_span_t_id)
                                     {
                                         created_span.sub_span_t_ids.push((
-                                            info.t_id,
+                                            span_item.trace_id,
                                             created_span_id,
                                             false,
                                         ));
@@ -779,64 +776,71 @@ impl RunningApp {
                                     }
                                 }
 
-                                if let Some(parent_span_id) = info.running_span.parent {
+                                if let Some(parent_span_id) = span_item.parent_id {
                                     write!(
                                         batch_inserter,
                                         r#"insert into tracing_span_parent(span_id, span_parent_id) values ('{}','{}') on conflict do nothing;"#,
-                                        info.running_span.id, parent_span_id
+                                        span_item.id, parent_span_id
                                     )?;
                                 }
 
-                                let run_time = info.record_time.fixed_offset();
-                                let span_id = info.running_span.id;
+                                let run_time = span_item.record_date.fixed_offset();
                                 writeln!(
                                     batch_inserter,
                                     r#"insert into tracing_span_run(id,app_run_id,span_id,run_time,record_id,fields) values ('{}','{}','{}','{}','{}','{{}}'::jsonb);"#,
-                                    created_span_id, app_info.run_id, span_id, run_time, record.id
+                                    created_span_id,
+                                    self.app_info.run_id,
+                                    span_item.id,
+                                    run_time,
+                                    record.id
                                 )?;
 
                                 Some(TracingTreeRecordVariantDto::SpanRun(TracingSpanRunDto {
                                     id: created_span_id,
-                                    app_run_id: app_info.run_id,
-                                    span_id,
-                                    run_time: info.record_time.fixed_offset(),
+                                    app_run_id: self.app_info.run_id,
+                                    span_id: span_item.id,
+                                    run_time,
                                     busy_duration: None,
                                     idle_duration: None,
                                     record_id: record.id,
                                     close_record_id: None,
                                     exception_end: Default::default(),
                                     run_elapsed: Some(0.),
-                                    fields: Arc::new(info.fields.clone().into_json_map()),
+                                    fields: Arc::new(span_item.fields.clone().into_json_map()),
                                     related_events: Default::default(),
                                 }))
                             }
-                            TracingRecordVariant::SpanClose { info } => {
+                            TracingRecordVariant::SpanClose {
+                                span,
+                                record_date,
+                                record_index,
+                            } => {
+                                let record_date = record_date.clone();
                                 self.set_exception_end_for_sub_spans(
-                                    info.t_id,
+                                    span.trace_id,
                                     batch_inserter,
-                                    info.record_time,
+                                    record_date.clone(),
                                 )?;
-                                let Some(created_span) = self.remove_created_span(info.t_id) else {
+                                let Some(created_span) = self.remove_created_span(span.trace_id)
+                                else {
                                     continue;
                                 };
-                                if let Some(parent_span_t_id) =
-                                    created_span.running_span.parent_span_t_id
-                                {
+                                if let Some(parent_span_t_id) = created_span.parent_trace_id {
                                     if let Some(created_span) =
                                         self.get_created_span_mut(parent_span_t_id)
                                     {
                                         if let Some(find) = created_span
                                             .sub_span_t_ids
                                             .iter_mut()
-                                            .find(|n| n.0 == info.t_id)
+                                            .find(|n| n.0 == span.trace_id)
                                         {
                                             find.2 = true;
                                         }
                                     }
                                 }
 
-                                let span_id = info.running_span.id;
-                                let duration = info.record_time - created_span.record_time;
+                                let span_id = span.id;
+                                let duration = record_date - created_span.record_date;
                                 let idle_duration = duration - created_span.total_enter_duration;
                                 let idle_duration = idle_duration.num_milliseconds() as f64 / 1000.;
                                 let busy_duration =
@@ -849,21 +853,27 @@ impl RunningApp {
                                 )?;
                                 Some(TracingTreeRecordVariantDto::SpanRun(TracingSpanRunDto {
                                     id: created_span.id,
-                                    app_run_id: app_info.run_id,
+                                    app_run_id: self.app_info.run_id,
                                     span_id,
-                                    run_time: created_span.record_time.fixed_offset(),
+                                    run_time: created_span.record_date.fixed_offset(),
                                     busy_duration: Some(busy_duration),
                                     idle_duration: Some(idle_duration),
                                     record_id: created_span.record_id,
                                     close_record_id: Some(record.id),
                                     exception_end: Default::default(),
                                     run_elapsed: Some(0.),
-                                    fields: Arc::new(info.fields.clone().into_json_map()),
+                                    fields: Arc::new(Default::default()), // TODO:
+                                    // fields: Arc::new(info.fields.clone().into_json_map()),
                                     related_events: Default::default(),
                                 }))
                             }
-                            TracingRecordVariant::SpanRecord { info } => {
-                                let Some(created_span) = self.get_created_span_mut(info.t_id)
+                            TracingRecordVariant::SpanRecord {
+                                span,
+                                fields,
+                                record_date,
+                                record_index,
+                            } => {
+                                let Some(created_span) = self.get_created_span_mut(span.trace_id)
                                 else {
                                     continue;
                                 };
@@ -872,11 +882,11 @@ impl RunningApp {
                                     match &mut created_span.last_record_filed_id {
                                         None => {
                                             created_span.last_record_filed_id =
-                                                Some((record.id, mem::take(&mut info.fields)));
+                                                Some((record.id, mem::take(fields)));
                                         }
-                                        Some((last_record_filed_id, fields)) => {
+                                        Some((last_record_filed_id, another_fields)) => {
                                             *last_record_filed_id = record.id;
-                                            fields.insert_other(&mut info.fields);
+                                            another_fields.extend(fields);
                                         }
                                     }
                                 }
@@ -885,11 +895,11 @@ impl RunningApp {
                                 {
                                     continue;
                                 }
-                                let (_, fields) = created_span.last_record_filed_id.take().unwrap();
+                                let (_, fields_r) = created_span.last_record_filed_id.take().unwrap();
                                 let created_span_id = created_span.id;
 
-                                let (r, fields) = TracingRecordVariant::scoped_json_fields_by(
-                                    Some(fields),
+                                let (r, fields_r) = TracingRecordVariant::scoped_json_fields_by(
+                                    Some(fields_r),
                                     |json_fields| {
                                         json_buf.clear();
                                         serde_json::to_writer(&mut json_buf, json_fields)?;
@@ -908,11 +918,16 @@ impl RunningApp {
                                     },
                                 );
                                 r?;
-                                info.fields = fields.unwrap();
+                                *fields = fields_r.unwrap();
                                 None
                             }
-                            TracingRecordVariant::SpanEnter { info } => {
-                                let Some(created_span) = self.get_created_span_mut(info.t_id)
+                            TracingRecordVariant::SpanEnter {
+                                span,
+                                record_date,
+                                record_index,
+                            } => {
+                                let record_date = record_date.clone();
+                                let Some(created_span) = self.get_created_span_mut(span.trace_id)
                                 else {
                                     continue;
                                 };
@@ -920,14 +935,11 @@ impl RunningApp {
                                 if let Some(_enter_span) =
                                     created_span.enter_span.replace(EnteredSpan {
                                         id,
-                                        record_time: info.record_time,
+                                        record_date,
                                         record_id: record.id,
                                     })
                                 {
-                                    warn!(
-                                        "app {} span {} already enter! will replace old",
-                                        info.app_info.id, info.running_span.id
-                                    );
+                                    warn!(?span, "span already enter! will replace old");
                                 }
                                 let enter_span = created_span.enter_span.as_mut().unwrap();
                                 let created_span_id = created_span.id;
@@ -938,7 +950,7 @@ impl RunningApp {
                                     r#"insert into tracing_span_enter(id,span_run_id,enter_time,record_id) values ('{}','{}','{}','{}');"#,
                                     enter_span_id,
                                     created_span_id,
-                                    info.record_time.fixed_offset(),
+                                    record_date.fixed_offset(),
                                     record.id,
                                 )?;
 
@@ -946,7 +958,7 @@ impl RunningApp {
                                     TracingSpanEnterDto {
                                         id: enter_span_id,
                                         span_run_id: created_span_id,
-                                        enter_time: info.record_time.fixed_offset(),
+                                        enter_time: record_date.fixed_offset(),
                                         enter_elapsed: Some(0.),
                                         already_run: None,
                                         duration: None,
@@ -955,28 +967,33 @@ impl RunningApp {
                                     },
                                 ))
                             }
-                            TracingRecordVariant::SpanLeave { info } => {
-                                let Some(created_span) = self.get_created_span_mut(info.t_id)
+                            TracingRecordVariant::SpanLeave {
+                                span,
+                                record_date,
+                                record_index,
+                            } => {
+
+                                let record_date = record_date.clone();
+                                let Some(created_span) = self.get_created_span_mut(span.trace_id)
                                 else {
                                     continue;
                                 };
 
                                 let Some(enter_span) = created_span.enter_span.take() else {
-                                    warn!(
-                                        "app {} span {} not enter!",
-                                        app_info.id, info.running_span.id
-                                    );
+                                    warn!(?span, "span not enter!");
                                     continue;
                                 };
-                                let duration = info.record_time - enter_span.record_time;
+                                let duration = record_date - enter_span.record_date;
                                 if let Some(r) =
                                     created_span.total_enter_duration.checked_add(&duration)
                                 {
                                     created_span.total_enter_duration = r;
                                 } else {
                                     warn!(
-                                        "app {} span {} total_enter_duration overflow",
-                                        app_info.id, info.running_span.id
+                                        added = ?duration,
+                                        ?created_span.total_enter_duration,
+                                        ?span,
+                                        "span total_enter_duration overflow"
                                     );
                                 }
                                 let created_span_id = created_span.id;
@@ -992,7 +1009,7 @@ impl RunningApp {
                                     TracingSpanEnterDto {
                                         id: enter_span_id,
                                         span_run_id: created_span_id,
-                                        enter_time: enter_span.record_time.fixed_offset(),
+                                        enter_time: enter_span.record_date.fixed_offset(),
                                         enter_elapsed: Some(0.),
                                         already_run: None,
                                         duration: Some(duration_secs),
@@ -1003,10 +1020,10 @@ impl RunningApp {
                             }
                             TracingRecordVariant::Event { .. } => None,
                             TracingRecordVariant::AppStart { .. } => {
-                                return Err(anyhow!("unreachable AppStart"))
+                                return Err(anyhow!("unreachable AppStart"));
                             }
                             TracingRecordVariant::AppStop { .. } => {
-                                return Err(anyhow!("unreachable AppStop"))
+                                return Err(anyhow!("unreachable AppStop"));
                             }
                         };
                         self.dto_buf.push((record, r));
@@ -1023,7 +1040,7 @@ impl RunningApp {
                         batch_inserter.execute(&self.tracing_service.dc),
                         async {
                             for (record, dto) in dto_buf.drain(..) {
-                                event_service.notify(record, dto).await;
+                                event_service.notify(record, dto, &self.app_info).await;
                             }
                             Ok(())
                         }
@@ -1110,11 +1127,11 @@ impl RunningApp {
 fn set_exception_end_for_span_run(
     id: &Uuid,
     batch_inserter: &mut SqlBatchExecutor,
-    record_time: DateTime<Utc>,
+    record_date: DateTime<Utc>,
 ) -> Result<(), std::fmt::Error> {
     writeln!(
         batch_inserter,
         r#"update tracing_span_run set exception_end='{}' where id = '{}';"#,
-        record_time, id
+        record_date, id
     )
 }

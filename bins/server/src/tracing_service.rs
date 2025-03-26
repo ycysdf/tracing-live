@@ -1,9 +1,5 @@
 use crate::dyn_query::{TLBinOp, TableColumnInfo, TableInfo};
 use crate::global_data::GLOBAL_DATA;
-use crate::grpc_service::{
-    TracingServiceImpl, FIELD_DATA_IS_CONTAINS_RELATED, FIELD_DATA_LAST_REPEATED_TIME,
-    FIELD_DATA_REPEATED_COUNT, FIELD_DATA_SPAN_T_ID, FIELD_DATA_STABLE_SPAN_ID,
-};
 use crate::record::{AppRunInfo, SpanCacheId, SpanId, TracingKind, TracingRecordVariant};
 use crate::{RECORD_ID_GENERATOR, SELF_APP_ID};
 use chrono::{DateTime, FixedOffset, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeDelta, Utc};
@@ -11,6 +7,7 @@ use entity::app_build::{ActiveModel, Column};
 use entity::tracing_record::Model;
 use entity::tracing_span::Entity;
 use entity::*;
+use sea_orm::ActiveValue::{Set, Unchanged};
 use sea_orm::prelude::{BigDecimal, Decimal, Expr, Json, RcOrArc, StringLen};
 use sea_orm::sea_query::extension::postgres::{IntoTypeRef, PgExpr};
 use sea_orm::sea_query::{
@@ -20,17 +17,16 @@ use sea_orm::sea_query::{
 use sea_orm::sqlx::error::BoxDynError;
 use sea_orm::sqlx::postgres::{PgArguments, PgRow};
 use sea_orm::sqlx::{Arguments, Encode, Error, Postgres, Row, Type};
-use sea_orm::ActiveValue::{Set, Unchanged};
 use sea_orm::{
-    sqlx, ColumnTrait, ColumnType, Condition, ConnectionTrait, DbBackend, DynIden, IdenStatic,
-    Iterable, LoaderTrait, PaginatorTrait, QueryOrder, QuerySelect, QueryTrait, SelectColumns,
-    Statement, Value,
+    ColumnTrait, ColumnType, Condition, ConnectionTrait, DbBackend, DynIden, IdenStatic, Iterable,
+    LoaderTrait, PaginatorTrait, QueryOrder, QuerySelect, QueryTrait, SelectColumns, Statement,
+    Value, sqlx,
 };
 use sea_orm::{DatabaseConnection, DbErr, EntityTrait, InsertResult, QueryFilter, TryInsertResult};
 use sea_orm_migration::SchemaManager;
 use sea_query_binder::SqlxValues;
 use serde::{Deserialize, Deserializer, Serialize};
-use smallvec::{smallvec, SmallVec};
+use smallvec::{SmallVec, smallvec};
 use smol_str::{SmolStr, ToSmolStr};
 use std::borrow::Cow;
 use std::cmp::Reverse;
@@ -40,10 +36,14 @@ use std::ops::{Add, Range};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
+use num_enum::{IntoPrimitive, TryFromPrimitive};
 use tokio::join;
 use tokio_util::time::FutureExt as _;
 use tracing::{error, info, instrument, warn};
-use tracing_lv_core::proto::{FieldValue, Level};
+use tracing_lv_core::{
+    FIELD_DATA_IS_CONTAINS_RELATED, FIELD_DATA_REPEATED_COUNT, FIELD_DATA_SPAN_T_ID,
+    FIELD_DATA_STABLE_SPAN_ID,
+};
 use tracing_subscriber::filter::FilterExt;
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
@@ -105,7 +105,7 @@ impl TracingRecordBatchInserter {
         name: &str,
         record_time: &DateTime<FixedOffset>,
         kind: &str,
-        level: Option<Level>,
+        level: Option<TracingLevel>,
         span_id: Option<SpanId>,
         parent_span_t_id: Option<i64>,
         parent: Option<SpanId>,
@@ -198,7 +198,10 @@ impl TracingRecordBatchInserter {
     // }
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Copy, Clone, Debug, ToSchema)]
+#[derive(
+    Serialize, Deserialize, PartialEq, Copy, Clone, Debug, ToSchema, IntoPrimitive, TryFromPrimitive,
+)]
+#[repr(u8)]
 pub enum TracingLevel {
     Trace,
     Debug,
@@ -207,29 +210,20 @@ pub enum TracingLevel {
     Error,
 }
 
-impl From<Level> for TracingLevel {
-    fn from(value: Level) -> Self {
-        match value {
-            Level::Trace => TracingLevel::Trace,
-            Level::Debug => TracingLevel::Debug,
-            Level::Info => TracingLevel::Info,
-            Level::Warn => TracingLevel::Warn,
-            Level::Error => TracingLevel::Error,
-        }
-    }
-}
-impl From<TracingLevel> for Level {
-    fn from(value: TracingLevel) -> Self {
-        match value {
-            TracingLevel::Trace => Level::Trace,
-            TracingLevel::Debug => Level::Debug,
-            TracingLevel::Info => Level::Info,
-            TracingLevel::Warn => Level::Warn,
-            TracingLevel::Error => Level::Error,
-        }
-    }
-}
+impl<'a> TryFrom<&'a str> for TracingLevel {
+    type Error = ();
 
+    fn try_from(value: &'a str) -> Result<Self, ()> {
+        Ok(match value {
+            "TRACE" => TracingLevel::Trace,
+            "DEBUG" => TracingLevel::Debug,
+            "INFO" => TracingLevel::Info,
+            "WARN" => TracingLevel::Warn,
+            "ERROE" => TracingLevel::Error,
+            _ => return Err(()),
+        })
+    }
+}
 #[derive(Serialize, Debug, ToSchema)]
 pub struct AppLatestRunInfoDto {
     pub id: Uuid,
@@ -725,19 +719,19 @@ impl TracingService {
                 .order_by_desc(tracing_span_enter::Column::EnterTime)
                 .one(dc)
                 .await?
-               .map(|n| {
-                   n.enter_time
-                      + TimeDelta::try_milliseconds(
-                       n.duration.map(|n| n * 1000.).unwrap_or_default() as _,
-                   )
-                      .unwrap_or_else(|| {
-                          warn!(
+                .map(|n| {
+                    n.enter_time
+                        + TimeDelta::try_milliseconds(
+                            n.duration.map(|n| n * 1000.).unwrap_or_default() as _,
+                        )
+                        .unwrap_or_else(|| {
+                            warn!(
                                 "TimeDelta::try_milliseconds error. duration: {}",
                                 n.duration.map(|n| n * 1000.).unwrap_or_default()
                             );
-                          Default::default()
-                      })
-               });
+                            Default::default()
+                        })
+                });
             let stop_time = last_date.unwrap_or(item.run_time);
             tracing_span_run::Entity::update(tracing_span_run::ActiveModel {
                 id: Unchanged(item.id),
@@ -1034,19 +1028,19 @@ impl TracingService {
             .apply_if(filter.name, |n, (op, value)| {
                 n.filter(Expr::col(Column::Name).binary(op, value))
             })
-            .apply_if(filter.scene, |n, scene| match scene {
-                TracingRecordScene::Tree => n.filter(
-                    Expr::col(Column::Kind).is_in(
-                        [
-                            TracingKind::Event,
-                            TracingKind::AppStart,
-                            TracingKind::SpanCreate,
-                        ]
-                        .map(|n| n.as_str()),
-                    ),
-                ),
-                TracingRecordScene::SpanField => n,
-                TracingRecordScene::SpanEnter => n,
+            .apply_if(filter.scene, |n, scene| {
+                let kinds = [
+                    TracingKind::Event,
+                    TracingKind::AppStart,
+                    TracingKind::SpanCreate,
+                ];
+                match scene {
+                    TracingRecordScene::Tree => {
+                        n.filter(Expr::col(Column::Kind).is_in(kinds.iter().map(|n| n.as_str())))
+                    }
+                    TracingRecordScene::SpanField => n,
+                    TracingRecordScene::SpanEnter => n,
+                }
             });
         if !filter.app_run_ids.as_ref().is_some_and(|n| !n.is_empty()) {
             let mut condition = Cond::any();
@@ -1077,16 +1071,13 @@ impl TracingService {
         if let Some(levels) = filter.levels {
             select = match levels.len() {
                 1 => select.filter(Column::Level.eq({
-                    let level: Level = levels[0].into();
+                    let level: TracingLevel = levels[0].into();
                     level as u32
                 })),
                 0 => select,
                 _ => select.filter(
                     Cond::any()
-                        .add(Column::Level.is_in(levels.into_iter().map(|n| {
-                            let level: Level = n.into();
-                            level as u32
-                        })))
+                        .add(Column::Level.is_in(levels.into_iter().map(|level| level as u32)))
                         .add(Column::Level.is_null()),
                 ),
             }
@@ -1655,7 +1646,7 @@ impl TracingService {
         name: String,
         record_time: DateTime<FixedOffset>,
         kind: String,
-        level: Option<Level>,
+        level: Option<TracingLevel>,
         span_id: Option<SpanId>,
         parent: Option<SpanId>,
         fields: Option<serde_json::Value>,
@@ -1821,14 +1812,7 @@ impl From<tracing_record::Model> for TracingRecordDto {
             node_id: n.node_id.into(),
             name: n.name.into(),
             kind: n.kind.parse().unwrap(),
-            level: n
-                .level
-                .map(|n| {
-                    tracing_lv_core::proto::Level::try_from(n)
-                        .ok()
-                        .map(|n| n.into())
-                })
-                .flatten(),
+            level: n.level.map(|n| (n as u8).try_into().unwrap()),
             span_id: n.span_id,
             fields: Arc::new(fields),
             target: n.target.map(|n| n.into()),
