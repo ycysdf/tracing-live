@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use std::time::Instant;
 use hashbrown::HashMap;
-use serde_json::{Number, Value};
 use uuid::{Bytes, Uuid};
 use xy_rpc::formats::{MessagePackFormat, SerdeFormat};
 use xy_rpc::maybe_send::{MaybeSend, MaybeSync};
@@ -30,9 +29,9 @@ pub enum TLValue {
 impl Into<serde_json::Value> for TLValue {
    fn into(self) -> serde_json::Value {
       match self {
-         TLValue::F64(n) => serde_json::Value::Number(Number::from_f64(n).unwrap()),
-         TLValue::I64(n) => serde_json::Value::Number(Number::from_i128(n as _).unwrap()),
-         TLValue::U64(n) => serde_json::Value::Number(Number::from_u128(n as _).unwrap()),
+         TLValue::F64(n) => serde_json::Value::Number(serde_json::Number::from_f64(n).unwrap()),
+         TLValue::I64(n) => serde_json::Value::Number(serde_json::Number::from_i128(n as _).unwrap()),
+         TLValue::U64(n) => serde_json::Value::Number(serde_json::Number::from_u128(n as _).unwrap()),
          TLValue::Bool(n) => serde_json::Value::Bool(n),
          TLValue::String(n) => serde_json::Value::String(n.to_string()),
          TLValue::Bytes(n) => serde_json::Value::String(todo!()), // TODO:

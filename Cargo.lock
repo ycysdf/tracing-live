@@ -3661,6 +3661,7 @@ dependencies = [
  "tracing",
  "tracing-core",
  "tracing-lv-core",
+ "tracing-lv-track",
  "tracing-subscriber",
  "uuid",
  "xy-rpc",
@@ -3731,6 +3732,17 @@ dependencies = [
  "utoipa-swagger-ui",
  "uuid",
  "xy-rpc",
+]
+
+[[package]]
+name = "tracing-lv-track"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "pin-project",
+ "tokio",
+ "tracing",
+ "tracing-core",
 ]
 
 [[package]]

@@ -6,7 +6,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tower_http::compression::CompressionLayer;
-use tracing::{Instrument, error, info_span, warn};
+use tracing::{Instrument, error, info, info_span, warn};
 use tracing_lv_core::catch_panic::program_panic_catch;
 use tracing_lv_core::proto::{AppStartInfo, TLRecordVariant, TracingRecordItem};
 use tracing_lv_core::{MsgReceiverSubscriber, TLAppInfo, TLLayer};
@@ -54,6 +54,8 @@ async fn main() -> anyhow::Result<()> {
         .await
         .expect("Fail to initialize database connection");
 
+    info!("Hello");
+    info_span!("FF").in_scope(|| tracing::info_span!("FF span"));
     let tracing_service = TracingService::new(dc.clone());
 
     let (msg_sender, msg_receiver) = flume::unbounded::<RunMsg>();
@@ -61,23 +63,17 @@ async fn main() -> anyhow::Result<()> {
     {
         let tracing_service = tracing_service.clone();
         let msg_sender = msg_sender.clone();
-        let (app_run_msg_sender, app_run_msg_receiver) = flume::unbounded::<AppRunMsg>();
         tokio::spawn(async move {
             let fut = async move {
                 let app_info =
                     TLAppInfo::new(SELF_APP_ID, "Tracing Live Server", build::PKG_VERSION)
                         .node_name("Server");
-                let (mut self_lifetime, app_run_record) = AppRunLifetime::new(
+                let mut self_lifetime = AppRunLifetime::new(
                     AppStartInfo::from_app_info(app_info, Uuid::new_v4()),
                     tracing_service,
-                    app_run_msg_sender,
+                    msg_sender,
                 )
                 .await?;
-                msg_sender.send(RunMsg::AppRun {
-                    app_run_record,
-                    record_sender: self_lifetime.record_sender.clone(),
-                    record_receiver: app_run_msg_receiver,
-                })?;
                 while let Ok(msg) = self_record_receiver.recv_async().await {
                     let record_index = msg.variant.record_index();
                     let record = match msg.variant {
@@ -88,7 +84,7 @@ async fn main() -> anyhow::Result<()> {
                     };
                     if let Err(err) =
                         self_lifetime
-                            .record_sender
+                            .app_run_record_sender
                             .send(AppRunMsg::Record(AppRunRecord {
                                 id: RECORD_ID_GENERATOR.next(),
                                 record_index: record_index as _,
@@ -172,7 +168,7 @@ async fn main() -> anyhow::Result<()> {
         .instrument(info_span!("axum http web server", ?addr))
     });
 
-    let grpc_serve_future = tokio::spawn(async move{
+    let grpc_serve_future = tokio::spawn(async move {
         let addr = SocketAddr::from((
             Ipv4Addr::UNSPECIFIED,
             env::var("GRPC_PORT")
@@ -196,7 +192,12 @@ async fn main() -> anyhow::Result<()> {
                     }
                 })
                 .build_from_tokio_read_write(stream.into_split());
-            tokio::spawn(fut);
+            tokio::spawn(async move {
+                if let Err(e) = fut.await {
+                    eprintln!("rpc error: {:?}", e);
+                };
+                drop(_channel);
+            });
         }
         anyhow::Ok(())
         // Server::builder()

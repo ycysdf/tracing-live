@@ -29,7 +29,7 @@ bytes = "1.9.0"
 xy-rpc = { path = "../../../xy-rpc", features = ["rt_tokio"] }
 derive_more = { version = "1", features = ["full"] }
 
-
+tracing-lv-track = { path = "../../libs/track" }
 tracing-lv-core = { path = "../../crates/core", optional = true, features = ["client", "std"], version = "0.0.2" }
 tower = { version = "0.5", optional = true }
 hyper = { version = "1.4", features = ["client"], optional = true }

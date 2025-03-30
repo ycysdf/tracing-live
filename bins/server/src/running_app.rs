@@ -101,7 +101,7 @@ impl AppRunRecord {
             position_info: self.variant.file_line(),
             creation_time: Utc::now().fixed_offset(),
             parent_id: self.variant.parent_id(),
-            span_t_id: self.variant.span_t_id().map(|n| n.to_smolstr()),
+            span_t_id: self.variant.span_trace_id().map(|n| n.to_smolstr()),
             parent_span_t_id: self.variant.parent_span_trace_id().map(|n| n.to_smolstr()),
             repeated_count: None,
         }

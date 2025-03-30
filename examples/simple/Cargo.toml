@@ -7,7 +7,7 @@ edition = "2024"
 #tracing-lv = { version = "0.0.1" }
 tracing-lv = { version = "0.0.2", path = "../../libs/client" }
 tracing = "0.1"
-tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4"] }
 anyhow = "1"

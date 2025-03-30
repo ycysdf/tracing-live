@@ -15,7 +15,7 @@ use tracing_lv::{TLAppInfo, TLSetting};
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
         .tracing_lv_init(
-            "http://localhost:8080",
+            "localhost:8080",
             TLAppInfo::new(
                 uuid::uuid!("f7570e13-d331-40f7-8d04-e87530308c01"), // App Identify
                 "Case Test App",                                     // App Name

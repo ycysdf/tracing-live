@@ -9,7 +9,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{error, info, info_span, instrument, warn, Instrument, Span};
 use tracing_lv::TLAppInfo;
 use tracing_lv::TLSubscriberExt;
-use tracing_lv::{TLAsyncReadExt, TLAsyncWriteExt, TLStreamExt};
+use tracing_lv::{TLAsyncReadExt, TLAsyncWriteExt, TLFuturesExt};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

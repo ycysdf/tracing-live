@@ -399,7 +399,7 @@ impl TracingRecordVariant {
                     let Ok(value) = value.as_ref().unwrap().parse::<u64>() else {
                         return true;
                     };
-                    if let Some(span_t_id) = self.span_t_id() {
+                    if let Some(span_t_id) = self.span_trace_id() {
                         if !span_t_id.apply_filter_op(value, *op) {
                             return false;
                         }
@@ -561,7 +561,7 @@ impl TracingRecordVariant {
     //     }
     // }
     #[inline(always)]
-    pub fn span_t_id(&self) -> Option<u64> {
+    pub fn span_trace_id(&self) -> Option<u64> {
         Some(self.span_info()?.trace_id)
     }
 
@@ -569,7 +569,7 @@ impl TracingRecordVariant {
     pub fn parent_span_trace_id(&self) -> Option<u64> {
         Some(match self {
             TracingRecordVariant::Event { event_item, .. } => event_item.span.as_ref()?.trace_id,
-            _ => self.span_info()?.trace_id,
+            _ => self.span_info()?.parent_trace_id?,
         })
     }
     #[inline(always)]

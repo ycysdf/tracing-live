@@ -60,18 +60,18 @@ export const ALL_LEVELS = [
   TracingLevel.Error,
 ];
 export const TREE_KINDS = [
-  "SPAN_CREATE",
-  "SPAN_ENTER",
-  "SPAN_LEAVE",
-  "SPAN_CLOSE",
-  "SPAN_RECORD",
-  "EVENT",
+  TracingKind.SpanCreate,
+  TracingKind.SpanEnter,
+  TracingKind.SpanLeave,
+  TracingKind.SpanClose,
+  TracingKind.SpanRecord,
+  TracingKind.Event,
 ]
 
 export const KINDS = [
   ...TREE_KINDS,
-  "APP_START",
-  "APP_STOP",
+  TracingKind.AppStart,
+  TracingKind.AppStop,
 ]
 
 export const RECORD_FIELDS = {

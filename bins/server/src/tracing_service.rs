@@ -219,7 +219,7 @@ impl<'a> TryFrom<&'a str> for TracingLevel {
             "DEBUG" => TracingLevel::Debug,
             "INFO" => TracingLevel::Info,
             "WARN" => TracingLevel::Warn,
-            "ERROE" => TracingLevel::Error,
+            "ERROR" => TracingLevel::Error,
             _ => return Err(()),
         })
     }

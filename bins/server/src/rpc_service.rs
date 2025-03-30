@@ -70,14 +70,12 @@ impl TracingService for TracingServiceImpl {
                 };
                 let span_id = span.id();
                 let fut = async move {
-                    let (app_run_record_sender, app_run_record_receiver) = flume::unbounded();
-                    let (mut app_run_lifetime, app_run_record) = AppRunLifetime::new(
-                        info,
-                        tracing_service.clone(),
-                        app_run_record_sender,
-                    )
-                    .instrument(info_span!(parent:span_id,"start",app_run_info="",record=""))
-                    .await?;
+                    let mut app_run_lifetime =
+                        AppRunLifetime::new(info, tracing_service.clone(), record_sender)
+                            .instrument(
+                                info_span!(parent:span_id,"start",app_run_info="",record=""),
+                            )
+                            .await?;
 
                     {
                         GLOBAL_DATA.add_running_app(
@@ -85,15 +83,6 @@ impl TracingService for TracingServiceImpl {
                             delta_date_nanos,
                         );
                     }
-
-                    // TODO:
-                    record_sender
-                        .send(RunMsg::AppRun {
-                            record_sender: app_run_lifetime.record_sender.clone(),
-                            app_run_record,
-                            record_receiver: app_run_record_receiver,
-                        })
-                        .context("send app run message failed")?;
 
                     if app_run_lifetime.app_start.reconnect {
                         let last_record_index = tracing_service
@@ -108,13 +97,12 @@ impl TracingService for TracingServiceImpl {
                             .context("send reconnect reply message failed")?;
                     }
 
-                    let mut last_record_index = 0;
                     let result = async {
                         while let Some(result) = streaming.next().await {
                             let TracingRecordItem { send_time, variant } = result?;
 
                             let record_index = variant.record_index() as i64;
-                            last_record_index = record_index;
+                            app_run_lifetime.last_record_index = record_index;
                             let variant = match variant {
                                 TLRecordVariant::TLMsg(msg) => app_run_lifetime.record(msg).await?,
                                 TLRecordVariant::AppStop { exception_end, .. } => {
@@ -126,13 +114,15 @@ impl TracingService for TracingServiceImpl {
                             //     "{:?} .record_index: {record_index}",
                             //     app_run_lifetime.app_run_info.run_id
                             // );
-                            if let Err(err) = app_run_lifetime.record_sender.send(
-                                AppRunMsg::Record(AppRunRecord {
-                                    id: RECORD_ID_GENERATOR.next(),
-                                    record_index,
-                                    variant,
-                                }),
-                            ) {
+                            if let Err(err) =
+                                app_run_lifetime
+                                    .app_run_record_sender
+                                    .send(AppRunMsg::Record(AppRunRecord {
+                                        id: RECORD_ID_GENERATOR.next(),
+                                        record_index,
+                                        variant,
+                                    }))
+                            {
                                 info!(?err, "record_sender send failed. exit!");
                                 break;
                             }
@@ -149,16 +139,11 @@ impl TracingService for TracingServiceImpl {
                         Ok(Some((date, exception_end))) => exception_end.then_some(date),
                         Ok(None) => None,
                     };
-                    let app_run_record = app_run_lifetime
-                        .app_stop(exception_stop, last_record_index + 1)
-                        .await
+                    app_run_lifetime
+                        .app_stop(exception_stop)
                         .inspect_err(|err| {
                             error!("app_stop error: {err}");
                         })
-                        .unwrap();
-                    record_sender
-                        .send(RunMsg::AppStop { app_run_record })
-                        .inspect_err(|err| error!("send app stop message failed. {err:?}"))
                         .unwrap();
 
                     info!("app lifetime end");
@@ -220,12 +205,25 @@ bitflags! {
 
 pub struct AppRunLifetime {
     tracing_service: crate::tracing_service::TracingService,
-    #[allow(dead_code)]
-    pub record_sender: flume::Sender<AppRunMsg>,
+    pub record_sender: flume::Sender<RunMsg>,
+    pub app_run_record_sender: flume::Sender<AppRunMsg>,
     pub app_run_info: Arc<AppRunInfo>,
     pub app_start: AppStartInfo,
     pub span_id_cache: lru::LruCache<SpanCacheId, SpanId>,
-    // pub running_spans: hashbrown::HashMap<u64, RunningSpan>,
+    pub last_record_index: i64, // pub running_spans: hashbrown::HashMap<u64, RunningSpan>,
+    pub stopped: bool,
+}
+
+impl Drop for AppRunLifetime {
+    fn drop(&mut self) {
+        if self.stopped {
+            return;
+        }
+        let _ = self.app_stop(Some(Utc::now())).inspect_err(|err| {
+            error!("app_stop error: {err}");
+        });
+        info!("app exception end");
+    }
 }
 
 impl AppRunLifetime {
@@ -385,10 +383,11 @@ impl AppRunLifetime {
                     target: metadata.target.into_smol_str(),
                     level: metadata
                         .level
-                        .as_ref()
+                        .to_uppercase()
+                        .as_str()
                         .try_into()
                         .ok()
-                        .context("invalid level")?,
+                        .with_context(|| format!("invalid level {}", metadata.level))?,
                     module_path: metadata
                         .module_path
                         .map(|n| n.into_smol_str())
@@ -482,8 +481,8 @@ impl AppRunLifetime {
     pub async fn new(
         app_start: AppStartInfo,
         tracing_service: crate::tracing_service::TracingService,
-        record_sender: flume::Sender<AppRunMsg>,
-    ) -> anyhow::Result<(Self, AppRunRecord)> {
+        record_sender: flume::Sender<RunMsg>,
+    ) -> anyhow::Result<Self> {
         let mut record = Self::app_start(app_start.clone()).await?;
         let TracingRecordVariant::AppStart { app_info, .. } = &record else {
             unreachable!()
@@ -525,22 +524,31 @@ impl AppRunLifetime {
         Span::current().record("record", debug(&record));
         Span::current().record("app_start", debug(&app_start));
         Span::current().record("app_info", debug(&app_info));
-        let record = AppRunRecord {
+        let app_run_record = AppRunRecord {
             id: RECORD_ID_GENERATOR.next(),
             record_index: 0,
             variant: record,
         };
-        Ok((
-            Self {
-                app_start,
-                tracing_service,
-                record_sender,
-                app_run_info: app_info.clone(),
-                span_id_cache: lru::LruCache::new(NonZeroUsize::new(1024).unwrap()),
-                // running_spans,
-            },
-            record,
-        ))
+        let (app_run_record_sender, app_run_record_receiver) = flume::unbounded();
+
+        record_sender
+            .send(RunMsg::AppRun {
+                record_sender: app_run_record_sender.clone(),
+                app_run_record,
+                record_receiver: app_run_record_receiver,
+            })
+            .context("send app run message failed")?;
+        Ok(Self {
+            app_start,
+            tracing_service,
+            record_sender,
+            app_run_record_sender,
+            app_run_info: app_info.clone(),
+            span_id_cache: lru::LruCache::new(NonZeroUsize::new(1024).unwrap()),
+            // running_spans,
+            last_record_index: 0,
+            stopped: false,
+        })
     }
 
     pub async fn get_span_id_by_cahce_id(&mut self, info: &SpanCacheId) -> anyhow::Result<SpanId> {
@@ -619,13 +627,10 @@ impl AppRunLifetime {
     //       .clone())
     // }
 
-    async fn app_stop(
-        mut self,
-        exception_sotp: Option<DateTime<Utc>>,
-        record_index: i64,
-    ) -> anyhow::Result<AppRunRecord> {
-        let exception_end = exception_sotp.is_some();
-        let record_time = exception_sotp.clone().unwrap_or_else(|| {
+    fn app_stop(&mut self, exception_stop: Option<DateTime<Utc>>) -> anyhow::Result<()> {
+        self.stopped = true;
+        let exception_end = exception_stop.is_some();
+        let record_time = exception_stop.clone().unwrap_or_else(|| {
             GLOBAL_DATA
                 .get_node_now_timestamp_nanos(self.app_run_info.run_id)
                 .map(DateTime::from_timestamp_nanos)
@@ -676,16 +681,22 @@ impl AppRunLifetime {
            .inspect_err(|err| {
               error!("error: {err}");
            });*/
-        Ok(AppRunRecord {
-            id: RECORD_ID_GENERATOR.next(),
-            record_index,
-            variant: TracingRecordVariant::AppStop {
-                record_date: record_time,
-                app_info: self.app_run_info.clone(),
-                name: self.app_start.name.into(),
-                exception_end,
-            },
-        })
+        self.record_sender
+            .send(RunMsg::AppStop {
+                app_run_record: AppRunRecord {
+                    id: RECORD_ID_GENERATOR.next(),
+                    record_index: self.last_record_index + 1,
+                    variant: TracingRecordVariant::AppStop {
+                        record_date: record_time,
+                        app_info: self.app_run_info.clone(),
+                        name: self.app_start.name.clone(),
+                        exception_end,
+                    },
+                },
+            })
+            .inspect_err(|err| error!("send app stop message failed. {err:?}"))
+            .unwrap();
+        Ok(())
     }
 }
 //

@@ -10,10 +10,11 @@ use futures_util::{FutureExt, StreamExt};
 use hyper::Uri;
 use serde::{Deserialize, Serialize};
 use std::future::Future;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncSeek, AsyncWrite};
-use tokio::net::ToSocketAddrs;
+use tokio::net::{TcpSocket, TcpStream, ToSocketAddrs};
 use tokio::task::yield_now;
 use tokio::time::Instant;
 use tracing::instrument::{WithDispatch, WithSubscriber};
@@ -164,13 +165,24 @@ where
         D: ToSocketAddrs,
     {
         let run_id = Uuid::new_v4();
+        let stream = TcpStream::connect(dst).await?;
 
-        let stream = tokio::net::TcpStream::connect(dst).await?;
+        // let socket = TcpSocket::new_v4()?;
+        // socket.set_nodelay(true)?;
+        // let addr = tokio::net::lookup_host(dst).await?.next().unwrap();
+        //
+        // let stream = socket
+        //     .connect(SocketAddr::new(Ipv4Addr::LOCALHOST.into(), addr.port()))
+        //     .await?;
         let (channel, channel_fut) = ChannelBuilder::new(tracing_lv_core::proto::FORMAT::default())
             .only_call()
             .build_from_tokio_read_write(stream.into_split());
         // TODO:
-        tokio::spawn(channel_fut);
+        tokio::spawn(async move {
+            if let Err(e) = channel_fut.await {
+                eprintln!("rpc error: {e:?}");
+            }
+        });
 
         let (msg_sender, msg_receiver) = flume::unbounded();
 
@@ -208,10 +220,15 @@ where
 
         #[cfg(not(feature = "reconnect_and_persistence"))]
         let (subscriber, future) = {
-            drop(app_start_info);
             (
                 Box::new(MsgReceiverSubscriber::new(msg_sender.clone())) as _,
-                crate::client::tracing_msg_subscriber(client, msg_receiver),
+                async move {
+                    if let Err(err) =
+                        tracing_msg_subscriber(app_start_info, channel, msg_receiver).await
+                    {
+                        eprintln!("error: {err:?}");
+                    }
+                },
             )
         };
 
