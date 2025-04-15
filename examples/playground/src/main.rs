@@ -1,15 +1,15 @@
 use bytes::{BufMut, BytesMut};
 use futures_util::future::join_all;
-use futures_util::{join, StreamExt};
+use futures_util::{StreamExt, join};
 use rand::distributions::Standard;
 use rand::prelude::SliceRandom;
-use rand::{thread_rng, Rng};
+use rand::{Rng, thread_rng};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tracing::{error, info, info_span, instrument, warn, Instrument, Span};
-use tracing_lv::TLAppInfo;
+use tracing::{Instrument, Span, error, info, info_span, instrument, warn};
 use tracing_lv::TLSubscriberExt;
-use tracing_lv::{TLAsyncReadExt, TLAsyncWriteExt, TLFuturesExt};
+use tracing_lv::{TLAppInfo, TLStreamInstrumentExt};
+use tracing_lv::{TLAsyncReadExt, TLAsyncWriteExt};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -151,6 +151,6 @@ async fn repeat_do_things() {
 #[instrument]
 async fn app_init() {
     info!("app init start");
-    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
     info!("app init finished");
 }

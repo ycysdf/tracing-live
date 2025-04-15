@@ -4,7 +4,7 @@ use std::env;
 use std::future::IntoFuture;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpSocket};
 use tower_http::compression::CompressionLayer;
 use tracing::{Instrument, error, info, info_span, warn};
 use tracing_lv_core::catch_panic::program_panic_catch;
@@ -54,8 +54,6 @@ async fn main() -> anyhow::Result<()> {
         .await
         .expect("Fail to initialize database connection");
 
-    info!("Hello");
-    info_span!("FF").in_scope(|| tracing::info_span!("FF span"));
     let tracing_service = TracingService::new(dc.clone());
 
     let (msg_sender, msg_receiver) = flume::unbounded::<RunMsg>();
@@ -168,7 +166,7 @@ async fn main() -> anyhow::Result<()> {
         .instrument(info_span!("axum http web server", ?addr))
     });
 
-    let grpc_serve_future = tokio::spawn(async move {
+    let rpc_serve_future = tokio::spawn(async move {
         let addr = SocketAddr::from((
             Ipv4Addr::UNSPECIFIED,
             env::var("GRPC_PORT")
@@ -178,7 +176,12 @@ async fn main() -> anyhow::Result<()> {
                 .unwrap_or(8080),
         ));
         let span = info_span!("tonic grpc server", ?addr);
-        let tcp_listener = TcpListener::bind(addr).await?;
+        let socket = TcpSocket::new_v4()?;
+        socket.set_keepalive(true)?;
+        socket.bind(addr)?;
+        let mut tcp_listener = socket.listen(1024)?;
+        // let tcp_listener = TcpListener::bind(addr).await?;
+
         while let Ok((stream, addr)) = tcp_listener.accept().await {
             let (_channel, fut) = ChannelBuilder::new(tracing_lv_core::proto::FORMAT::default())
                 .only_serve({
@@ -222,7 +225,7 @@ async fn main() -> anyhow::Result<()> {
         r = http_web_serve_future => {
             r??
         }
-        r = grpc_serve_future => {
+        r = rpc_serve_future => {
             r??
         }
         r = handle_records_future => {

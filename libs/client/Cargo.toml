@@ -7,8 +7,9 @@ license = "MIT"
 repository = "https://github.com/ycysdf/tracing-live"
 
 [features]
-default = ["dep:tokio", "dep:tracing-lv-core", "dep:tower", "dep:hyper", "dep:hyper-util"]
+default = ["tokio", "dep:tracing-lv-core", "dep:tower", "dep:hyper", "dep:hyper-util"]
 reconnect_and_persistence = ["dep:zstd", "dep:binrw", "dep:rmp-serde"]
+tokio = ["dep:tokio", "tracing-lv-track/tokio"]
 
 [dependencies]
 tracing = "0.1"

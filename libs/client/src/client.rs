@@ -34,6 +34,7 @@ use xy_rpc::{ChannelBuilder, RpcError, XyRpcChannel};
 pub enum TLError {
     Io(std::io::Error),
     Rpc(RpcError),
+    Join(tokio::task::JoinError),
 }
 
 pub struct NoSubscriberService<T>(T);
@@ -130,7 +131,7 @@ pub trait TLSubscriberExt: Sized {
         let r = f().await;
         _guard.normal_stop();
         drop(_guard);
-        handle.await.unwrap();
+        handle.await?;
         Ok(r)
     }
 }
@@ -177,12 +178,6 @@ where
         let (channel, channel_fut) = ChannelBuilder::new(tracing_lv_core::proto::FORMAT::default())
             .only_call()
             .build_from_tokio_read_write(stream.into_split());
-        // TODO:
-        tokio::spawn(async move {
-            if let Err(e) = channel_fut.await {
-                eprintln!("rpc error: {e:?}");
-            }
-        });
 
         let (msg_sender, msg_receiver) = flume::unbounded();
 
@@ -238,13 +233,16 @@ where
                 enable_enter: false,
                 record_index: 1.into(),
             }),
-            future,
-            // async move {
-            //     futures_util::select! {
-            //         r = future.fuse() => {},
-            //         r = channel_fut.fuse() => {}
-            //     }
-            // },
+            async move {
+                futures_util::select! {
+                    _ = future.fuse() => {},
+                    r = channel_fut.fuse() => {
+                        if let Err(e) = r {
+                            eprintln!("rpc error: {e:?}");
+                        }
+                    }
+                }
+            },
             TLGuard {
                 msg_sender,
                 is_normal_drop: false,
