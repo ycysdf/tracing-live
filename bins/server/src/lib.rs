@@ -1,23 +1,21 @@
-#![feature(duration_millis_float)]
-#![feature(unboxed_closures)]
 #![allow(unused_imports)]
 
 use shadow_rs::shadow;
 use std::sync::atomic::{AtomicI64, AtomicU64};
 use std::{sync, u64};
-use uuid::{uuid, Uuid};
+use uuid::{Uuid, uuid};
 
 mod dyn_query;
 pub mod event_service;
 mod global_data;
 pub mod record;
 pub mod related_event;
+pub mod rpc_service;
 pub mod running_app;
 mod setting_service;
 pub mod tracing_service;
 mod web_error;
 pub mod web_service;
-pub mod rpc_service;
 
 shadow!(build);
 
@@ -41,6 +39,5 @@ impl RecordIdGenerator {
 }
 
 pub static RECORD_ID_GENERATOR: RecordIdGenerator = RecordIdGenerator(AtomicI64::new(1));
-
 
 pub const SELF_APP_ID: Uuid = uuid!("51E5297E-949F-DABC-76B1-F34E5FCEA32F");
