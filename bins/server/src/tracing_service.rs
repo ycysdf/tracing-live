@@ -604,10 +604,11 @@ impl TracingService {
     pub async fn init(&self) -> Result<(), DbErr> {
         if std::env::var("AUTO_INIT_DATABASE")
             .map(|n| n == "true")
-            .unwrap_or(false)
+            .unwrap_or(true)
         {
             let manager = SchemaManager::new(&self.dc);
             if !manager.has_table("tracing_record").await? {
+                println!("tt");
                 info!("tracing_record table does not exist. start init database!");
                 self.dc
                     .execute_unprepared(include_str!("../sql.sql"))

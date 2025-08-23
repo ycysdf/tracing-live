@@ -1,3 +1,4 @@
+#![feature(duration_millis_float)]
 #![allow(unused_imports)]
 
 use shadow_rs::shadow;
