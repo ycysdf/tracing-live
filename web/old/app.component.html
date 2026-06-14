@@ -1,0 +1,36 @@
+<div class="flex flex-row gap-2">
+  <app-nav class="min-w-[170px]"></app-nav>
+  <router-outlet></router-outlet>
+</div>
+
+<!--
+<div class="flex flex-col">
+  <div>Jobs</div>
+  <div>Tasks</div>
+  <div>Nodes</div>
+</div>
+<div class="flex flex-col gap-y-2">
+  @if (data !=null) {
+    DD: {{data()}}
+  }
+  <div>
+    Job Define List
+  </div>
+  <div class="flex flex-col">
+    @for (item of jobs; track $index) {
+      <div (click)="selectedJob.select($index);" [class.bg-gray-100!]="selectedJob.isSelected($index)"
+           class="flex flex-col gap-y-0.5 py-2 px-4 border-t border-gray-200 hover:bg-gray-50">
+        <div class="font-bold">Job Define {{ $index }}</div>
+        <div class="text-sm">Description</div>
+      </div>
+    }
+  </div>
+</div>
+<div>
+  @if (!selectedJob.isEmpty()) {
+    <div>
+      <div>{{ selectedJob.selected[0] |json }}</div>
+    </div>
+  }
+</div>
+-->
