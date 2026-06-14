@@ -1,0 +1,193 @@
+<!-- Main Traces Page -->
+<div class="flex flex-col gap-3 overflow-hidden flex-grow">
+  <!-- Node Filter Panel -->
+  <div class="panel flex flex-col p-2 gap-2 flex-grow-0">
+    <div class="flex flex-row border-b pb-2 gap-2 justify-between">
+      <!-- App selection -->
+      <div class="flex flex-row flex-1">
+        @for (app of nodesPage()?.apps ?? []; track app.id) {
+          <div
+            class="flex gap-1 text-nowrap items-center hover:bg-stone-100 cursor-pointer rounded px-2 py-1 -my-1"
+            (click)="toggleApp(app.id); toggleNode('')"
+            (keydown.enter)="toggleApp(app.id); toggleNode('')"
+            tabindex="0"
+            role="checkbox"
+            [attr.aria-checked]="isAppSelected(app.id)"
+          >
+            <!-- Checkbox -->
+            <div
+              class="size-4 shrink-0 rounded-sm border border-primary flex items-center justify-center cursor-pointer"
+              [class.bg-primary]="isAppSelected(app.id)"
+              [class.text-primary-foreground]="isAppSelected(app.id)"
+              (click)="$event.preventDefault(); $event.stopPropagation(); toggleApp(app.id)"
+            >
+              @if (isAppSelected(app.id)) {
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="size-4">
+                  <path d="M5 12l5 5l10 -10"/>
+                </svg>
+              }
+            </div>
+            <div class="text-sm">{{ app.name }} ( {{ app.node_count }} )</div>
+          </div>
+        }
+      </div>
+
+      <!-- Search input -->
+      <input
+        [ngModel]="nodeSearch()"
+        (ngModelChange)="onNodeSearchChange($event)"
+        [placeholder]="i18n.t('search', 'common')"
+        class="p-2 px-3 border-x -m-2 outline-none text-sm"
+      />
+
+      <!-- Node count -->
+      <div class="flex flex-1">
+        <div class="flex-grow"></div>
+        <div>{{ nodesPage()?.nodes?.length ?? 0 }}</div>
+      </div>
+    </div>
+
+    <!-- Node items -->
+    <div
+      #nodesContainer
+      class="flex gap-2 overflow-x-auto small-scrollbar"
+      [class.justify-center]="nodesPageLoading()"
+    >
+      @if (nodesPageLoading()) {
+        <app-loading class="self-center" />
+      } @else {
+        @for (node of filteredNodes(); track node.node_id) {
+          <app-node-item
+            [data]="node"
+            [now]="nodesPage()?.date ?? now"
+            [isSelected]="isNodeSelected(node.node_id)"
+            (itemClick)="toggleNode(node.node_id)"
+          />
+        } @empty {
+          <div class="flex justify-center items-center text-center flex-grow">空</div>
+        }
+      }
+    </div>
+  </div>
+
+  <!-- Tree View Area -->
+  <div class="flex flex-grow gap-3 overflow-hidden">
+    <div class="flex flex-col flex-grow gap-3 overflow-hidden">
+      <!-- Search bar -->
+      <div class="panel py-2 px-3 flex">
+        <div class="flex flex-grow gap-3 items-stretch">
+          <input
+            [placeholder]="i18n.t('search', 'common') + ' (PostgreSQL Like Syntax)'"
+            class="outline-none flex-grow flex-shrink text-sm bg-gray-50 block"
+            style="padding: 8px; margin: -8px -4px; max-width: 300px"
+            (keydown.enter)="setSearch($any($event.target).value)"
+          />
+          <div class="flex-grow"></div>
+
+          <!-- Level filter buttons -->
+          <div class="flex border-stone-50 flex-row -my-2 items-stretch">
+            @for (level of ALL_LEVELS; track level) {
+              <div
+                class="text-xsm border-transparent text-gray-500 select-none flex items-center cursor-pointer font-bold p-2"
+                [style.color]="getLevelColor(level)"
+                [class.bg-stone-100]="isLevelSelected(level)"
+                [class.hover:bg-stone-50]="!isLevelSelected(level)"
+                (click)="toggleLevel(level)"
+                (keydown.enter)="toggleLevel(level)"
+                tabindex="0"
+                role="checkbox"
+                [attr.aria-checked]="isLevelSelected(level)"
+                [attr.aria-label]="level"
+              >{{ level.toUpperCase() }}</div>
+            }
+          </div>
+        </div>
+      </div>
+
+      <!-- Tree/Flatten content -->
+      <div class="flex flex-col flex-grow overflow-hidden gap-3">
+        <div class="panel py-2 overflow-hidden flex flex-col flex-grow">
+          <!-- Trace path + mode toggle -->
+          <div class="flex justify-between border-b pb-2 items-center gap-2 px-2">
+            <div class="flex-grow">
+              @if (tracePath().length > 0 || selectedItem()) {
+                <app-trace-path
+                  class="-my-1"
+                  [path]="tracePath()"
+                  [hasRoot]="true"
+                  (pathClick)="onTracePathClick($event)"
+                />
+              }
+            </div>
+            <!-- Tree/Flatten toggle -->
+            <div class="flex flex-row rounded overflow-hidden border-2 border-gray-100">
+              @for (mode of SHOW_MODES; track mode) {
+                <div
+                  class="py-1 px-2 text-xsm cursor-pointer"
+                  [class.hover:bg-stone-100]="filter().showMode !== mode"
+                  [class.bg-primary]="filter().showMode === mode"
+                  [class.text-primary-foreground]="filter().showMode === mode"
+                  (click)="setShowMode(mode)"
+                >{{ mode }}</div>
+              }
+            </div>
+          </div>
+
+          <!-- Tree content -->
+          @if (treeLoading()) {
+            <app-loading-panel />
+          } @else if (treeData(); as data) {
+            <div #rootContainer class="overflow-hidden overflow-y-scroll flex-grow">
+              @if (filter().showMode === 'Tree') {
+                <div class="flex flex-col gap-1 pb-1.5 pt-1.5">
+                  @for (item of data.records; track item.record.id) {
+                    <app-tree-item
+                      [data]="item"
+                      [isEnd]="item.end != null"
+                      [layer]="0"
+                      [path]="tracePath()"
+                    />
+                  } @empty {
+                    <app-empty />
+                  }
+                </div>
+              } @else {
+                <!-- Flatten table view -->
+                <table class="border-collapse w-full flex flex-col overflow-y-auto">
+                  <tbody>
+                    @for (item of data.records; track item.record.id) {
+                      <tr
+                        class="leading-8"
+                        [class.bg-stone-100]="selectedItem()?.record?.record?.id === item.record.id"
+                        [class.hover:bg-stone-50]="selectedItem()?.record?.record?.id !== item.record.id"
+                        (click)="onSelectTreeItem(item)"
+                      >
+                        <td class="whitespace-nowrap" [style.background]="getLevelColor(item.record.level)" style="width: 2px"></td>
+                        <td class="w-[1%] pl-2 pr-2 whitespace-nowrap">{{ formatDate(item.record.record_time) }}</td>
+                        <td class="w-[1%] pr-2 whitespace-nowrap">{{ item.record.kind }}</td>
+                        <td class="text-left">
+                          <div class="text-nowrap text-ellipsis overflow-hidden max-w-[500px]">{{ item.record.name }}</div>
+                        </td>
+                        <td class="w-[1%] pr-2 whitespace-nowrap">{{ item.record.target }}</td>
+                      </tr>
+                    }
+                  </tbody>
+                </table>
+              }
+            </div>
+          }
+        </div>
+      </div>
+    </div>
+
+    <!-- Detail Panel -->
+    @if (selectedItem(); as item) {
+      <app-detail-panel
+        class="flex-grow-0"
+        [data]="item"
+        (goClick)="onGoClick(item)"
+        (tracePathClick)="onTracePathClick($event)"
+      />
+    }
+  </div>
+</div>
