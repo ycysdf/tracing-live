@@ -1,4 +1,4 @@
-import { Injectable, signal, computed, inject } from '@angular/core';
+import { Injectable, signal, computed, inject, resource } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 import {
   NodesService,
@@ -76,9 +76,18 @@ export class TracesService {
     scrollToBottomWhenAdded: false,
   });
 
-  // Node page data
-  readonly nodesPage = signal<NodesPageDto | null>(null);
-  readonly nodesPageLoading = signal(false);
+  // Node page data — reloads automatically when filter changes
+  readonly nodesPageResource = resource({
+    params: () => this.filter(),
+    loader: async ({ params: filter }) => {
+      return await firstValueFrom(
+        this.nodesService.nodesPage(
+          undefined,
+          filter.selectedAppIds.map((id: string) => [id, null]),
+        ),
+      );
+    },
+  });
 
   // Search
   readonly search = signal<string | undefined>(undefined);
@@ -105,10 +114,6 @@ export class TracesService {
     const path = this.tracePath();
     return path.length > 0 ? path[0].record.record.app_run_id ?? null : null;
   });
-
-  // Tree records data store
-  readonly treeData = signal<RecordsTreeData | null>(null);
-  readonly notMoreOlderData = signal(false);
 
   // Multi-selection helpers
   isLevelSelected(level: TracingLevel): boolean {
@@ -164,20 +169,6 @@ export class TracesService {
 
   setShowMode(mode: ShowMode): void {
     this.filter.update(f => ({ ...f, showMode: mode }));
-  }
-
-  // Fetch nodes page
-  async loadNodesPage(): Promise<void> {
-    this.nodesPageLoading.set(true);
-    try {
-      const filter = this.filter();
-      const result = await firstValueFrom(
-        this.nodesService.nodesPage(undefined, filter.selectedAppIds.map(id => [id, null]))
-      );
-      this.nodesPage.set(result);
-    } finally {
-      this.nodesPageLoading.set(false);
-    }
   }
 
   // Fetch tree records

@@ -134,9 +134,9 @@
           </div>
 
           <!-- Tree content -->
-          @if (treeLoading()) {
+          @if (treeDataResource.isLoading()) {
             <app-loading-panel />
-          } @else if (treeData(); as data) {
+          } @else if (treeDataResource.value(); as data) {
             <div #rootContainer class="overflow-hidden overflow-y-scroll flex-grow">
               @if (filter().showMode === 'Tree') {
                 <div class="flex flex-col gap-1 pb-1.5 pt-1.5">

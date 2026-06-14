@@ -1,13 +1,10 @@
-import { Component, signal, computed, inject, effect, DestroyRef, untracked } from '@angular/core';
+import { Component, computed, inject, effect, resource } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import {
   TracingKind,
   TracingLevel,
   TracingRecordScene,
-  type NodesPageDto,
   type TracingTreeRecordDto,
-  type AppNodeRunDto,
   type TracingRecordDto,
 } from '../../../api';
 import { TranslatePipe } from '@ngx-translate/core';
@@ -53,11 +50,10 @@ import { TreeItemComponent } from './tree-item.component';
 export class TracesPage {
   readonly service = inject(TracesService);
   readonly liveRecords = inject(LiveRecordsService);
-  readonly destroyRef = inject(DestroyRef);
 
   readonly filter = this.service.filter;
-  readonly nodesPage = this.service.nodesPage;
-  readonly nodesPageLoading = this.service.nodesPageLoading;
+  readonly nodesPage = this.service.nodesPageResource.value;
+  readonly nodesPageLoading = this.service.nodesPageResource.isLoading;
   readonly tracePath = this.service.tracePath;
   readonly selectedItem = this.service.selectedItem;
   readonly search = this.service.search;
@@ -66,8 +62,29 @@ export class TracesPage {
   readonly spanTId = this.service.spanTId;
   readonly appRunId = this.service.appRunId;
 
-  readonly treeData = signal<RecordsTreeData | null>(null);
-  readonly treeLoading = signal(false);
+  // Tree data — reloads automatically when tracePath or filter changes
+  readonly treeDataResource = resource({
+    params: () => ({
+      path: this.tracePath(),
+      filter: this.filter(),
+    }),
+    loader: async ({ params }) => {
+      const { path } = params;
+      const curSpanTId = path.length > 0 ? (path[path.length - 1].record.record.span_t_id ?? null) : null;
+      const curAppRunId = path.length > 0 ? (path[0].record.record.app_run_id ?? null) : null;
+      const curIsEnd = path.length > 0 ? path[path.length - 1].record.end != null : false;
+
+      return await this.service.loadTreeRecords({
+        appRunId: curAppRunId,
+        spanTId: curSpanTId,
+        parentSpanTId: curSpanTId,
+        isEnd: curIsEnd,
+        scene: TracingRecordScene.Tree,
+      });
+    },
+    defaultValue: null as RecordsTreeData | null,
+  });
+
   public now = new Date();
 
   readonly ALL_LEVELS = ALL_LEVELS;
@@ -75,16 +92,21 @@ export class TracesPage {
   readonly EXPANDABLE_KINDS = EXPANDABLE_KINDS;
 
   constructor() {
-    this.service.loadNodesPage();
+    // SSE live updates — auto-reattach when path changes
+    effect((onCleanup) => {
+      const data = this.treeDataResource.value();
+      if (!data || data.isEnd) return;
 
-    effect(() => {
-      // React to filter changes to reload nodes
-      this.filter();
-      untracked(() => this.service.loadNodesPage());
+      const path = this.tracePath();
+      const appRunId = path.length > 0 ? (path[0].record.record.app_run_id ?? null) : null;
+      const spanTId = path.length > 0 ? (path[path.length - 1].record.record.span_t_id ?? null) : null;
+
+      const sub = this.liveRecords
+        .subscribe({ appRunId, spanTId, isEnd: false })
+        .subscribe((record) => this.handleLiveRecord(record));
+
+      onCleanup(() => sub.unsubscribe());
     });
-
-    // Load initial tree data
-    this.loadTreeData();
   }
 
   // Computed filtered nodes
@@ -152,12 +174,10 @@ export class TracesPage {
 
   onTracePathClick(path: TracePathItem[]): void {
     this.service.navigateToPath(path);
-    this.loadTreeData();
   }
 
   onGoClick(item: SelectedTreeItem): void {
     this.service.goToItem(item);
-    this.loadTreeData();
   }
 
   onSelectTreeItem(item: TracingTreeRecordDto): void {
@@ -167,60 +187,21 @@ export class TracesPage {
     });
   }
 
-  // Tree data loading
-  async loadTreeData(): Promise<void> {
-    this.treeLoading.set(true);
-    try {
-      const path = this.tracePath();
-      const curSpanTId = path.length > 0 ? (path[path.length - 1].record.record.span_t_id ?? null) : null;
-      const curAppRunId = path.length > 0 ? (path[0].record.record.app_run_id ?? null) : null;
-      const curIsEnd = path.length > 0 ? path[path.length - 1].record.end != null : false;
-
-      const data = await this.service.loadTreeRecords({
-        appRunId: curAppRunId,
-        spanTId: curSpanTId,
-        parentSpanTId: curSpanTId,
-        isEnd: curIsEnd,
-        scene: TracingRecordScene.Tree,
-      });
-      this.treeData.set(data);
-
-      this.subscribeToLiveRecords(curAppRunId, curSpanTId);
-    } finally {
-      this.treeLoading.set(false);
-    }
-  }
-
-  private subscribeToLiveRecords(appRunId: string | null, spanTId: string | null): void {
-    const currentIsEnd = this.tracePath().length > 0
-      ? this.tracePath()[this.tracePath().length - 1].record.end != null
-      : false;
-
-    this.liveRecords
-      .subscribe({
-        appRunId: currentIsEnd ? null : appRunId,
-        spanTId: currentIsEnd ? null : spanTId,
-        isEnd: currentIsEnd,
-      })
-      .pipe(takeUntilDestroyed(this.destroyRef))
-      .subscribe((record) => this.handleLiveRecord(record));
-  }
-
   private handleLiveRecord(record: TracingTreeRecordDto): void {
-    this.treeData.update(d => {
+    this.treeDataResource.value.update(d => {
       if (!d) return d;
       const records = [...d.records];
 
       if (record.record.kind === TracingKind.SpanClose) {
         const idx = records.findIndex(
-          r => r.record.span_t_id === record.record.span_t_id && r.record.kind === TracingKind.SpanCreate
+          r => r.record.span_t_id === record.record.span_t_id && r.record.kind === TracingKind.SpanCreate,
         );
         if (idx >= 0) {
           records[idx] = { ...records[idx], end: record.end };
         }
       } else if (record.record.kind === TracingKind.AppStop) {
         const idx = records.findIndex(
-          r => r.record.app_run_id === record.record.app_run_id && r.record.kind === TracingKind.AppStart
+          r => r.record.app_run_id === record.record.app_run_id && r.record.kind === TracingKind.AppStart,
         );
         if (idx >= 0) {
           records[idx] = { ...records[idx], end: record.end, variant: record.variant };
@@ -233,7 +214,7 @@ export class TracesPage {
         }
       } else if (record.record.kind === TracingKind.RelatedEvent) {
         const idx = records.findIndex(
-          r => r.record.span_t_id === record.record.span_t_id && r.record.kind === TracingKind.SpanCreate
+          r => r.record.span_t_id === record.record.span_t_id && r.record.kind === TracingKind.SpanCreate,
         );
         if (idx >= 0) {
           const updated = { ...records[idx] };
@@ -248,7 +229,7 @@ export class TracesPage {
         }
       } else if (record.record.kind === TracingKind.SpanRecord) {
         const idx = records.findIndex(
-          r => r.record.span_t_id === record.record.span_t_id && r.record.kind === TracingKind.SpanCreate
+          r => r.record.span_t_id === record.record.span_t_id && r.record.kind === TracingKind.SpanCreate,
         );
         if (idx >= 0) {
           const updated = { ...records[idx] };
