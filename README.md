@@ -20,7 +20,8 @@ Tracing your Rust program in real time. based on Tracing
 ## Start Server
 
 ```shell
-docker run --name timescaledb -d -p 5432:5432 -e POSTGRES_PASSWORD=<You Posgtres Password> -v <Your Posgtres Data Dir>:/var/lib/postgresql/data timescale/timescaledb:latest-pg16
+docker run --name timescaledb -d -p 5432:5432 -e POSTGRES_PASSWORD=123456 -v D:/Data/timescaledb:/var/lib/postgresql/data timescale/timescaledb:latest-pg16
+#docker run --name timescaledb -d -p 5432:5432 -e POSTGRES_PASSWORD=<You Posgtres Password> -v <Your Posgtres Data Dir>:/var/lib/postgresql/data timescale/timescaledb:latest-pg16
 
 docker run --name tracing-live-server -d -p 443:443 -p 8080:8080 -e DATABASE_URL="postgresql://postgres:123456@host.docker.internal:5432/postgres" --add-host=host.docker.internal:host-gateway ycysdf/tracing-live-server
 ```

@@ -126,7 +126,7 @@ async fn app_main() -> anyhow::Result<()> {
         .await?;
     }
 
-    tracing::info!("Test thread");
+    info!("Test thread");
     let span1 = Span::current();
     std::thread::spawn(move || {
         span1.in_scope(|| {
@@ -135,14 +135,13 @@ async fn app_main() -> anyhow::Result<()> {
     })
     .join()
     .unwrap();
-    tracing::info!("Test thread JOIN END");
+    info!("Test thread JOIN END");
 
-    tracing::info!("Test spawn_blocking");
+    info!("Test spawn_blocking");
     let span = info_span!("spawn_blocking");
     tokio::task::spawn_blocking(move || span.in_scope(|| hello()))
-        .await
-        .unwrap();
-    tracing::info!("Test spawn_blocking END");
+        .await?;
+    info!("Test spawn_blocking END");
 
     let span = { info_span!("DoThingsContainer") };
     test_saved(span).await;
@@ -199,12 +198,12 @@ async fn test_auto_expand() {
     info_span!("TEST", FLAGS_AUTO_EXPAND).in_scope(|| info!("EVENT"));
 }
 fn hello() {
-    tracing::info!("Hello, world!");
+    info!("Hello, world!");
 }
 
 #[instrument]
 async fn test_empty_children() {
-    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
     info!("EVENT");
 }
 
@@ -239,7 +238,7 @@ async fn test_saved(container: Span) {
             async move {
                 async move {
                     info!(num, "do something start");
-                    tokio::time::sleep(tokio::time::Duration::from_millis(1))
+                    tokio::time::sleep(Duration::from_millis(1))
                         .instrument(info_span!("do something"))
                         .await;
                     info!("do something end");
