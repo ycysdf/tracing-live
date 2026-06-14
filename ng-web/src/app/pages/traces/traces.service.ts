@@ -208,21 +208,17 @@ export class TracesService {
       }];
     }
 
-    try {
-      const records = await firstValueFrom(this.listTreeRecordsSafe(params));
+    const records = await firstValueFrom(this.listTreeRecordsSafe(params));
 
-      let isEnd = false;
-      if (records.length <= COUNT) {
-        isEnd = true;
-      }
-      if (records.length === COUNT + 1) {
-        records.shift();
-      }
-
-      return { records, moreLoading: false, isEnd };
-    } catch {
-      return null;
+    let isEnd = false;
+    if (records.length <= COUNT) {
+      isEnd = true;
     }
+    if (records.length === COUNT + 1) {
+      records.shift();
+    }
+
+    return { records, moreLoading: false, isEnd };
   }
 
   private listTreeRecordsSafe(params: ListTreeRecordsParams) {

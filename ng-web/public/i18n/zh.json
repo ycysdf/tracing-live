@@ -8,6 +8,7 @@
     "setting": "设置"
   },
   "common": {
+    "error": "错误",
     "noData": "暂无数据",
     "search": "搜索"
   }

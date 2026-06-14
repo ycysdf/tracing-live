@@ -8,6 +8,7 @@
     "setting": "Setting"
   },
   "common": {
+    "error": "Error",
     "noData": "No Data",
     "search": "Search"
   }

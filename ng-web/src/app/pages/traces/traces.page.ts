@@ -54,6 +54,7 @@ export class TracesPage {
   readonly filter = this.service.filter;
   readonly nodesPage = this.service.nodesPageResource.value;
   readonly nodesPageLoading = this.service.nodesPageResource.isLoading;
+  readonly nodesPageError = this.service.nodesPageResource.error;
   readonly tracePath = this.service.tracePath;
   readonly selectedItem = this.service.selectedItem;
   readonly search = this.service.search;
