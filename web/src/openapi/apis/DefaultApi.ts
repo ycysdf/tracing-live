@@ -117,7 +117,7 @@ export class DefaultApi extends runtime.BaseAPI {
         const headerParameters: runtime.HTTPHeaders = {};
 
         const response = await this.request({
-            path: `/api/v1/apps`,
+            path: `/api/apps`,
             method: 'GET',
             headers: headerParameters,
             query: queryParameters,
@@ -153,7 +153,7 @@ export class DefaultApi extends runtime.BaseAPI {
         const headerParameters: runtime.HTTPHeaders = {};
 
         const response = await this.request({
-            path: `/api/v1/nodes`,
+            path: `/api/nodes`,
             method: 'GET',
             headers: headerParameters,
             query: queryParameters,
@@ -245,7 +245,7 @@ export class DefaultApi extends runtime.BaseAPI {
         const headerParameters: runtime.HTTPHeaders = {};
 
         const response = await this.request({
-            path: `/api/v1/records`,
+            path: `/api/records`,
             method: 'GET',
             headers: headerParameters,
             query: queryParameters,
@@ -337,7 +337,7 @@ export class DefaultApi extends runtime.BaseAPI {
         const headerParameters: runtime.HTTPHeaders = {};
 
         const response = await this.request({
-            path: `/api/v1/records/tree`,
+            path: `/api/records/tree`,
             method: 'GET',
             headers: headerParameters,
             query: queryParameters,
@@ -372,7 +372,7 @@ export class DefaultApi extends runtime.BaseAPI {
         const headerParameters: runtime.HTTPHeaders = {};
 
         const response = await this.request({
-            path: `/api/v1/records/tree_by_ids`,
+            path: `/api/records/tree_by_ids`,
             method: 'GET',
             headers: headerParameters,
             query: queryParameters,
@@ -404,7 +404,7 @@ export class DefaultApi extends runtime.BaseAPI {
         const headerParameters: runtime.HTTPHeaders = {};
 
         const response = await this.request({
-            path: `/api/v1/nodes/page`,
+            path: `/api/nodes/page`,
             method: 'GET',
             headers: headerParameters,
             query: queryParameters,

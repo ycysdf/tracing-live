@@ -2,26 +2,25 @@ use crate::record::TracingKind;
 use crate::running_app::RunMsg;
 use crate::tracing_service::TracingTreeRecordDto;
 use crate::tracing_service::{
-    AppLatestInfoDto, AppNodeFilter, AppNodeRunDto, AppRunDto, CursorInfo,
-    TracingRecordDto, TracingRecordFieldFilter, TracingRecordFilter, TracingService,
-    TracingSpanRunDto,
+    AppLatestInfoDto, AppNodeFilter, AppNodeRunDto, AppRunDto, CursorInfo, TracingRecordDto,
+    TracingRecordFieldFilter, TracingRecordFilter, TracingService, TracingSpanRunDto,
 };
 use crate::web_error::AppError;
 use axum::extract::rejection::QueryRejection;
 use axum::extract::{FromRequest, MatchedPath, Request, State};
 use axum::handler::Handler;
-use axum::http::{header, StatusCode, Uri};
+use axum::http::{StatusCode, Uri, header};
 use axum::response::sse::KeepAlive;
-use axum::response::{sse, Html, IntoResponse};
+use axum::response::{Html, IntoResponse, sse};
 use axum::response::{Response, Sse};
 use axum::routing::get;
 use axum::serve::IncomingStream;
 use axum::{Json, Router};
 use chrono::{DateTime, FixedOffset};
-use futures_util::{stream, Stream};
+use futures_util::{Stream, stream};
 use rust_embed::Embed;
 use serde::{Deserialize, Serialize};
-use smallvec::{smallvec, SmallVec};
+use smallvec::{SmallVec, smallvec};
 use std::convert::Infallible;
 use std::future::Future;
 use std::pin::Pin;
@@ -31,7 +30,7 @@ use tower::Service;
 use tower_http::classify::ServerErrorsFailureClass;
 use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
-use tracing::{error, warn, Span};
+use tracing::{Span, error, warn};
 use utoipa::{IntoParams, OpenApi, ToSchema};
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_swagger_ui::SwaggerUi;
@@ -53,9 +52,9 @@ pub fn router(tracing_service: TracingService, msg_sender: flume::Sender<RunMsg>
     let span = Span::current();
 
     let (router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
-        .nest("/api/v1/apps", apps::router(tracing_service.clone()))
-        .nest("/api/v1/records", records::router(tracing_service.clone()))
-        .nest("/api/v1/nodes", nodes::router(tracing_service.clone()))
+        .nest("/api/apps", apps::router(tracing_service.clone()))
+        .nest("/api/records", records::router(tracing_service.clone()))
+        .nest("/api/nodes", nodes::router(tracing_service.clone()))
         .layer(
             TraceLayer::new_for_http()
                 // Create our own span for the request and include the matched path. The matched
@@ -228,7 +227,7 @@ async fn records_subscribe(
     State((tracing_service, msg_sender)): State<(TracingService, flume::Sender<RunMsg>)>,
     Query(filter): Query<TracingRecordFilter>,
 ) -> Sse<impl Stream<Item = Result<sse::Event, Infallible>>> {
-   use futures::StreamExt;
+    use futures::StreamExt;
     let mut records: Vec<_> = tracing_service
         .list_tree_records(filter.clone())
         .await
@@ -268,8 +267,8 @@ async fn records_subscribe(
 mod apps {
     use super::{Query, Result};
     use crate::tracing_service::{AppLatestInfoDto, AppRunDto, TracingService};
-    use axum::extract::State;
     use axum::Json;
+    use axum::extract::State;
     use utoipa_axum::router::OpenApiRouter;
     use utoipa_axum::routes;
 
@@ -305,8 +304,8 @@ mod nodes {
         AppLatestInfoDto, AppNodeFilter, AppNodeRunDto, TracingService, TracingTreeRecordDto,
     };
     use crate::web_service::Query;
-    use axum::extract::State;
     use axum::Json;
+    use axum::extract::State;
     use chrono::{DateTime, FixedOffset, Local};
     use serde::Serialize;
     use std::iter::Iterator;
@@ -385,8 +384,8 @@ mod records {
     use crate::tracing_service::{
         TracingRecordDto, TracingRecordFilter, TracingService, TracingTreeRecordDto,
     };
-    use axum::extract::State;
     use axum::Json;
+    use axum::extract::State;
     use serde::Deserialize;
     use utoipa::IntoParams;
     use utoipa_axum::router::OpenApiRouter;
@@ -479,7 +478,7 @@ where
                 serde_qs::Config::new(5, false)
                     .deserialize_str(query)
                     .map_err(|e| {
-                        tracing::error!("Failed to parse query: {}", e);
+                        error!("Failed to parse query: {}", e);
                         format!("{e:?}")
                     })?,
             ))
