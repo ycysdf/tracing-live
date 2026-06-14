@@ -1,4 +1,4 @@
-import { Component, input, signal, computed, inject } from '@angular/core';
+import { Component, input, signal, computed, inject, HostListener, linkedSignal } from '@angular/core';
 import {
   TracingKind,
   TracingLevel,
@@ -9,19 +9,12 @@ import {
 import {
   EXPANDABLE_KINDS,
   getLevelColor,
-  RECORD_FIELDS,
+  RECORD_META_KEYS,
 } from '../../utils/constants';
-import { getFlags } from '../../utils/helpers';
+import { getFlags, getRelatedName } from '../../utils/helpers';
 import { cn } from '../../utils/cn';
+import { formatDuration, formatDate } from '../../utils/format';
 import { TracesService, type TracePathItem, type SelectedTreeItem } from './traces.service';
-
-function formatDuration(ms: number): string {
-  if (ms < 1000) return ms + 'ms';
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return s + 's';
-  const m = Math.floor(s / 60);
-  return m + 'm ' + (s % 60) + 's';
-}
 
 const ITEM_HEIGHT = 32;
 
@@ -150,7 +143,7 @@ const ITEM_HEIGHT = 32;
               <div class="w-[2px] flex-shrink-0 rounded-sm my-1 self-stretch ml-1.5 opacity-50"
                    [style.background]="getLevelColor(event.level)"></div>
               <div class="leading-none p-1 bg-stone-50 border text-primary text-xsm rounded-sm px-1 py-1">
-                {{ event.fields[RECORD_FIELDS.related_name] ?? 'NULL' }}
+                {{ getRelatedName(event.fields) ?? 'NULL' }}
               </div>
               <div class="text-ellipsis overflow-hidden whitespace-nowrap select-none">{{ event.name }}</div>
               @if (event.kind === TracingKind.Event && event.repeated_count != null) {
@@ -178,15 +171,19 @@ const ITEM_HEIGHT = 32;
 export class TreeItemComponent {
   readonly service = inject(TracesService);
   readonly ITEM_HEIGHT = ITEM_HEIGHT;
-  readonly RECORD_FIELDS = RECORD_FIELDS;
+  readonly RECORD_META_KEYS = RECORD_META_KEYS;
   readonly TracingKind = TracingKind;
+  readonly getRelatedName = getRelatedName;
 
   readonly data = input.required<TracingTreeRecordDto>();
   readonly isEnd = input(false);
   readonly layer = input(0);
   readonly path = input<TracePathItem[]>([]);
 
-  readonly expanded = signal(false);
+  readonly expanded = linkedSignal({
+    source: this.data,
+    computation: () => false,
+  });
   readonly contextMenuOpen = signal(false);
   readonly contextMenuX = signal(0);
   readonly contextMenuY = signal(0);
@@ -248,8 +245,7 @@ export class TreeItemComponent {
   }
 
   formatDate(date: Date | string): string {
-    if (!date) return '';
-    return new Date(date).toLocaleString();
+    return formatDate(date);
   }
 
   onSelect(): void {
@@ -270,19 +266,16 @@ export class TreeItemComponent {
     }
   }
 
+  @HostListener('document:click')
+  onDocumentClick(): void {
+    this.contextMenuOpen.set(false);
+  }
+
   onContextMenu(event: MouseEvent): void {
     event.preventDefault();
     this.contextMenuX.set(event.clientX);
     this.contextMenuY.set(event.clientY);
     this.contextMenuOpen.set(true);
-    // Close on next click outside
-    setTimeout(() => {
-      const close = () => {
-        this.contextMenuOpen.set(false);
-        document.removeEventListener('click', close);
-      };
-      document.addEventListener('click', close);
-    });
   }
 
   onGoHere(): void {

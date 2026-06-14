@@ -1,6 +1,7 @@
 import { Component, input, output, signal, computed } from '@angular/core';
 import { TracingKind } from '../../../api';
 import { EXPANDABLE_KINDS, NULL_STR } from '../../utils/constants';
+import { formatDate, formatValue } from '../../utils/format';
 import type { TracePathItem, SelectedTreeItem } from './traces.service';
 import { TracePathComponent } from './trace-path.component';
 
@@ -207,15 +208,10 @@ export class DetailPanelComponent {
   });
 
   formatDate(date: Date | string | undefined): string {
-    if (!date) return NULL_STR;
-    return new Date(date).toLocaleString();
+    return formatDate(date, NULL_STR);
   }
 
   formatValue(value: unknown): string {
-    if (value == null) return NULL_STR;
-    if (typeof value === 'string') {
-      return value.length > 8192 ? value.slice(0, 8192) + '< too long ! >...' : value;
-    }
-    return JSON.stringify(value, null, 2).slice(0, 8192);
+    return formatValue(value, NULL_STR);
   }
 }

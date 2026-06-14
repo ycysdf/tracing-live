@@ -60,11 +60,12 @@ export const KINDS: TracingKind[] = [
   TracingKind.AppStop,
 ];
 
-export const RECORD_FIELDS = {
+/** Meta keys stored under the `__data` prefix in record fields. */
+export const RECORD_META_KEYS = {
   flags: '__data.flags',
-  empty_children: '__data.empty_children',
-  related_name: '__data.related_name',
-};
+  emptyChildren: '__data.empty_children',
+  relatedName: '__data.related_name',
+} as const;
 
 export const EXPANDABLE_KINDS: TracingKind[] = [TracingKind.SpanCreate, TracingKind.AppStart];
 

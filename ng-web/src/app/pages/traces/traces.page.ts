@@ -1,7 +1,7 @@
-import { Component, signal, computed, inject, effect, OnDestroy } from '@angular/core';
+import { Component, signal, computed, inject, effect, DestroyRef, untracked } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import {
-  NodesService,
   TracingKind,
   TracingLevel,
   TracingRecordScene,
@@ -11,38 +11,33 @@ import {
   type TracingRecordDto,
 } from '../../../api';
 import { TranslatePipe } from '@ngx-translate/core';
-import { cn } from '../../utils/cn';
+import { formatDuration, formatDate } from '../../utils/format';
 import {
   ALL_LEVELS,
-  BASE_URL,
   EXPANDABLE_KINDS,
   getLevelColor,
-  RECORD_FIELDS,
-  NULL_STR,
 } from '../../utils/constants';
 import { LoadingComponent } from '../../components/loading.component';
 import { LoadingPanelComponent } from '../../components/loading-panel.component';
 import { EmptyComponent } from '../../components/empty.component';
-import { TracesService, type ShowMode, SHOW_MODES, type TracePathItem, type SelectedTreeItem, type RecordsTreeData } from './traces.service';
+import {
+  TracesService,
+  type ShowMode,
+  SHOW_MODES,
+  type TracePathItem,
+  type SelectedTreeItem,
+  type RecordsTreeData,
+} from './traces.service';
+import { LiveRecordsService } from './live-records.service';
 import { NodeItemComponent } from './node-item.component';
 import { TracePathComponent } from './trace-path.component';
 import { DetailPanelComponent } from './detail-panel.component';
 import { TreeItemComponent } from './tree-item.component';
 
-function formatDuration(ms: number): string {
-  if (ms < 1000) return ms + 'ms';
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return s + 's';
-  const m = Math.floor(s / 60);
-  if (m < 60) return m + 'm ' + (s % 60) + 's';
-  const h = Math.floor(m / 60);
-  return h + 'h ' + (m % 60) + 'm';
-}
-
 @Component({
   selector: 'app-traces-page',
   templateUrl: './traces.page.html',
-  providers: [TracesService],
+  providers: [TracesService, LiveRecordsService],
   imports: [
     FormsModule,
     TranslatePipe,
@@ -55,8 +50,10 @@ function formatDuration(ms: number): string {
     TreeItemComponent,
   ],
 })
-export class TracesPage implements OnDestroy {
+export class TracesPage {
   readonly service = inject(TracesService);
+  readonly liveRecords = inject(LiveRecordsService);
+  readonly destroyRef = inject(DestroyRef);
 
   readonly filter = this.service.filter;
   readonly nodesPage = this.service.nodesPage;
@@ -77,23 +74,17 @@ export class TracesPage implements OnDestroy {
   readonly SHOW_MODES = SHOW_MODES;
   readonly EXPANDABLE_KINDS = EXPANDABLE_KINDS;
 
-  private eventSource: EventSource | null = null;
-
   constructor() {
     this.service.loadNodesPage();
 
     effect(() => {
       // React to filter changes to reload nodes
       this.filter();
-      this.service.loadNodesPage();
+      untracked(() => this.service.loadNodesPage());
     });
 
     // Load initial tree data
     this.loadTreeData();
-  }
-
-  ngOnDestroy(): void {
-    this.closeEventSource();
   }
 
   // Computed filtered nodes
@@ -120,8 +111,7 @@ export class TracesPage implements OnDestroy {
   }
 
   formatDate(date: Date | string | undefined): string {
-    if (!date) return '';
-    return new Date(date).toLocaleString();
+    return formatDate(date);
   }
 
   setSearch(value: string): void {
@@ -195,32 +185,25 @@ export class TracesPage implements OnDestroy {
       });
       this.treeData.set(data);
 
-      this.setupEventSource(curAppRunId, curSpanTId);
+      this.subscribeToLiveRecords(curAppRunId, curSpanTId);
     } finally {
       this.treeLoading.set(false);
     }
   }
 
-  private setupEventSource(appRunId: string | null, spanTId: string | null): void {
-    this.closeEventSource();
-    const currentIsEnd = this.tracePath().length > 0 ? this.tracePath()[this.tracePath().length - 1].record.end != null : false;
-    if (currentIsEnd) return;
+  private subscribeToLiveRecords(appRunId: string | null, spanTId: string | null): void {
+    const currentIsEnd = this.tracePath().length > 0
+      ? this.tracePath()[this.tracePath().length - 1].record.end != null
+      : false;
 
-    const filter = this.filter();
-    const params = new URLSearchParams();
-    params.set('count', '51');
-    if (appRunId) params.set('app_run_ids', JSON.stringify([appRunId]));
-    if (spanTId) params.set('parent_span_t_ids', JSON.stringify([spanTId]));
-    params.set('scene', TracingRecordScene.Tree);
-
-    this.eventSource = new EventSource(`${BASE_URL}/records_subscribe?${params.toString()}`);
-    this.eventSource.onmessage = (event) => {
-      const record = JSON.parse(event.data) as TracingTreeRecordDto;
-      this.handleLiveRecord(record);
-    };
-    this.eventSource.onerror = () => {
-      this.eventSource?.close();
-    };
+    this.liveRecords
+      .subscribe({
+        appRunId: currentIsEnd ? null : appRunId,
+        spanTId: currentIsEnd ? null : spanTId,
+        isEnd: currentIsEnd,
+      })
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe((record) => this.handleLiveRecord(record));
   }
 
   private handleLiveRecord(record: TracingTreeRecordDto): void {
@@ -281,12 +264,5 @@ export class TracesPage implements OnDestroy {
 
       return { ...d, records };
     });
-  }
-
-  private closeEventSource(): void {
-    if (this.eventSource) {
-      this.eventSource.close();
-      this.eventSource = null;
-    }
   }
 }

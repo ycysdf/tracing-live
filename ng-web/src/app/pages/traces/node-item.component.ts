@@ -1,15 +1,6 @@
 import { Component, input, output, computed } from '@angular/core';
 import type { AppNodeRunDto } from '../../../api';
-
-function formatDuration(ms: number): string {
-  if (ms < 1000) return ms + 'ms';
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return s + 's';
-  const m = Math.floor(s / 60);
-  if (m < 60) return m + 'm ' + (s % 60) + 's';
-  const h = Math.floor(m / 60);
-  return h + 'h ' + (m % 60) + 'm';
-}
+import { formatDuration } from '../../utils/format';
 
 @Component({
   selector: 'app-node-item',

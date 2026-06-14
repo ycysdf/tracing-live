@@ -43,12 +43,4 @@ export class TranslationService {
     return this.ts.instant(fullKey);
   }
 
-  /** Usage: {{ 'common:search' | t }} */
-  translate(key: string): string {
-    const parts = key.split(':');
-    if (parts.length === 2) {
-      return this.t(parts[1], parts[0] as 'common');
-    }
-    return this.t(parts[0]);
-  }
 }
