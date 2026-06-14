@@ -2,28 +2,23 @@
 use crate::reconnect_and_persistence::{
     TLReconnectAndPersistenceSetting, reconnect_and_persistence,
 };
-use bytes::Bytes;
 use chrono::Utc;
 use derive_more::{Display, Error, From};
 use flume::Receiver;
 use futures_util::{FutureExt, StreamExt};
-use hyper::Uri;
 use serde::{Deserialize, Serialize};
 use std::future::Future;
-use std::net::{Ipv4Addr, SocketAddr};
-use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncSeek, AsyncWrite};
-use tokio::net::{TcpSocket, TcpStream, ToSocketAddrs};
+use tokio::net::{TcpStream, ToSocketAddrs};
 use tokio::task::yield_now;
-use tokio::time::Instant;
-use tracing::instrument::{WithDispatch, WithSubscriber};
+use tracing::instrument::WithSubscriber;
 use tracing::subscriber::NoSubscriber;
 use tracing_core::Dispatch;
 use tracing_lv_core::proto::{
     AppStartInfo, TLRecordVariant, TracingRecordItem, TracingServiceCaller, TracingServiceSchema,
 };
-use tracing_lv_core::{MsgReceiverSubscriber, TLAppInfo, TLLayer, TLMsg, TracingLiveMsgSubscriber};
+use tracing_lv_core::{MsgReceiverSubscriber, TLAppInfo, TLLayer, TracingLiveMsgSubscriber};
 use tracing_subscriber::layer::{Layered, SubscriberExt};
 use tracing_subscriber::registry::LookupSpan;
 use uuid::Uuid;

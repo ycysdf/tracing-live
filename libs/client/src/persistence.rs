@@ -181,7 +181,7 @@ impl RecordsPersistenceToFile {
         stream.rewind()?;
         records_metadata.write(&mut stream)?;
         assert_eq!(
-            stream.stream_position().unwrap(),
+            stream.stream_position()?,
             TLRecordsMetadata::SIZE as u64
         );
         Ok(records_metadata)
@@ -219,7 +219,7 @@ impl RecordsPersistenceToFile {
             stream.rewind()?;
             records_metadata.write(&mut stream)?;
             assert_eq!(
-                stream.stream_position().unwrap(),
+                stream.stream_position()?,
                 TLRecordsMetadata::SIZE as u64
             );
         }
@@ -381,7 +381,7 @@ impl RecordsPersistenceToFile {
         memory_span: MemorySpan,
         f: impl FnOnce(&mut Vec<u8>) -> U,
     ) -> std::io::Result<U> {
-        stream.seek(SeekFrom::Start(memory_span.pos)).unwrap();
+        stream.seek(SeekFrom::Start(memory_span.pos))?;
         self.cursor_buf.get_mut().reserve(memory_span.size as _);
         self.cursor_buf.get_mut().resize(memory_span.size as _, 0);
         stream.read_exact(&mut self.cursor_buf.get_mut()[..(memory_span.size as usize)])?;
@@ -406,8 +406,7 @@ impl RecordsPersistenceToFile {
         stream.seek(SeekFrom::Start(memory_span.pos))?;
         self.cursor_buf.get_mut().resize(memory_span.size as _, 0);
         stream
-            .read_exact(&mut self.cursor_buf.get_mut()[..(memory_span.size as usize)])
-            .unwrap();
+            .read_exact(&mut self.cursor_buf.get_mut()[..(memory_span.size as usize)])?;
         self.buf.clear();
         self.buf.reserve(TLBlockHeader::SIZE);
         let len = self.decompressor_with_dict.decompress_to_buffer(
@@ -537,7 +536,7 @@ impl RecordsPersistenceToFile {
     ) -> BinResult<()> {
         let prev_pos = stream.stream_position()?;
         stream.seek(SeekFrom::Start(0))?;
-        records_metadata.write(&mut stream).unwrap();
+        records_metadata.write(&mut stream)?;
         stream.flush()?;
         stream.seek(SeekFrom::Start(prev_pos))?;
         Ok(())
