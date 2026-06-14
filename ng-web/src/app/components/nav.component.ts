@@ -1,18 +1,16 @@
 import { Component, signal, inject } from '@angular/core';
-import { RouterLink, RouterLinkActive } from '@angular/router';
-import { TranslationService } from '../i18n/translation.service';
-import { cn } from '../utils/cn';
+import { Router, RouterLink, RouterLinkActive } from '@angular/router';
+import { TranslatePipe } from '@ngx-translate/core';
 
 interface NavItem {
-  name: string;
+  translationKey: string;
   url: string;
-  icon: string;
-  activeIcon: string;
+  iconSvg: string;
 }
 
 @Component({
   selector: 'app-nav',
-  imports: [RouterLink, RouterLinkActive],
+  imports: [RouterLink, RouterLinkActive, TranslatePipe],
   template: `
     <div
       class="border-r-gray-200 transition-[width] bg-background shadow-sm flex flex-col justify-between py-2 h-screen"
@@ -31,7 +29,7 @@ interface NavItem {
         @for (item of links; track item.url) {
           <a
             [routerLink]="item.url"
-            [title]="item.name"
+            [title]="item.translationKey | translate"
             class="gap-3 transition-[width] hover:bg-stone-50 flex items-center text-nowrap no-underline text-muted-foreground"
             [class.justify-center]="isCollapse()"
             [class.px-3]="!isCollapse()"
@@ -45,14 +43,14 @@ interface NavItem {
               height="16"
               viewBox="0 0 24 24"
               fill="none"
-              [attr.stroke]="isActive(item.url) ? 'currentColor' : 'currentColor'"
+              stroke="currentColor"
               [attr.stroke-width]="isActive(item.url) ? '2' : '1'"
               stroke-linecap="round"
               stroke-linejoin="round"
-              [innerHTML]="isActive(item.url) ? item.activeIconSvg : item.iconSvg"
+              [innerHTML]="item.iconSvg"
             ></svg>
             @if (!isCollapse()) {
-              <span>{{ item.name }}</span>
+              <span>{{ item.translationKey | translate }}</span>
             }
           </a>
         }
@@ -93,63 +91,50 @@ interface NavItem {
   `,
 })
 export class NavComponent {
-  readonly i18n = inject(TranslationService);
+  readonly router = inject(Router);
 
   readonly isCollapse = signal(this.getStoredCollapse());
 
-  readonly links: (NavItem & { iconSvg: string; activeIconSvg: string })[] = [
+  readonly links: NavItem[] = [
     {
-      name: this.i18n.t('overview'),
+      translationKey: 'translation.overview',
       url: '/index',
-      icon: 'kanban',
-      activeIcon: 'kanban-bold',
       iconSvg: `<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/>`,
-      activeIconSvg: `<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/>`,
     },
     {
-      name: this.i18n.t('trace'),
+      translationKey: 'translation.trace',
       url: '/trace',
-      icon: 'list-tree',
-      activeIcon: 'list-tree-bold',
       iconSvg: `<path d="M21 12a7 7 0 0 1-7 7"/><path d="M3 12a7 7 0 0 0 7 7"/><path d="M12 3v18"/><path d="M12 3a7 7 0 0 0-7 7"/><path d="M21 12a7 7 0 0 0-4-5.8"/>`,
-      activeIconSvg: `<path d="M21 12a7 7 0 0 1-7 7"/><path d="M3 12a7 7 0 0 0 7 7"/><path d="M12 3v18"/><path d="M12 3a7 7 0 0 0-7 7"/><path d="M21 12a7 7 0 0 0-4-5.8"/>`,
     },
     {
-      name: this.i18n.t('node'),
+      translationKey: 'translation.node',
       url: '/node',
-      icon: 'monitor',
-      activeIcon: 'monitor-bold',
       iconSvg: `<rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/>`,
-      activeIconSvg: `<rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/>`,
     },
     {
-      name: this.i18n.t('app'),
+      translationKey: 'translation.app',
       url: '/app',
-      icon: 'layout-grid',
-      activeIcon: 'layout-grid-bold',
       iconSvg: `<rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/>`,
-      activeIconSvg: `<rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/>`,
     },
     {
-      name: this.i18n.t('notify'),
+      translationKey: 'translation.notify',
       url: '/notify',
-      icon: 'bell-ring',
-      activeIcon: 'bell-ring-bold',
       iconSvg: `<path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 3.51A6 6 0 0 0 12 3"/>`,
-      activeIconSvg: `<path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 3.51A6 6 0 0 0 12 3"/>`,
     },
     {
-      name: this.i18n.t('setting'),
+      translationKey: 'translation.setting',
       url: '/setting',
-      icon: 'settings',
-      activeIcon: 'settings-bold',
       iconSvg: `<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>`,
-      activeIconSvg: `<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>`,
     },
   ];
 
   isActive(url: string): boolean {
-    return window.location.hash === '#' + url || window.location.pathname === url;
+    return this.router.isActive(url, {
+      paths: 'exact',
+      matrixParams: 'ignored',
+      queryParams: 'ignored',
+      fragment: 'ignored',
+    });
   }
 
   toggleCollapse(): void {
