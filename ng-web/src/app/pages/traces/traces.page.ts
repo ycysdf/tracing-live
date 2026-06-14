@@ -1,4 +1,4 @@
-import { Component, computed, inject, effect, resource, Injector } from '@angular/core';
+import { Component, computed, inject, effect, resource } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import {
   TracingKind,
@@ -19,6 +19,7 @@ import { LoadingPanelComponent } from '../../components/loading-panel.component'
 import { EmptyComponent } from '../../components/empty.component';
 import {
   TracesService,
+  type TracingTreeFilter,
   type ShowMode,
   SHOW_MODES,
   type TracePathItem,
@@ -64,14 +65,15 @@ export class TracesPage {
   readonly appRunId = this.service.appRunId;
 
   // Tree data — reloads automatically when tracePath or filter changes
-  readonly treeDataResource = resource({
+  readonly treeDataResource = resource<RecordsTreeData | null, { path: TracePathItem[]; filter: TracingTreeFilter }>({
     params: () => ({
       path: this.tracePath(),
       filter: this.filter(),
     }),
     loader: async ({ params }) => {
       const { path } = params;
-      const curSpanTId = path.length > 0 ? (path[path.length - 1].record.record.span_t_id ?? null) : null;
+      const curSpanTId =
+        path.length > 0 ? (path[path.length - 1].record.record.span_t_id ?? null) : null;
       const curAppRunId = path.length > 0 ? (path[0].record.record.app_run_id ?? null) : null;
       const curIsEnd = path.length > 0 ? path[path.length - 1].record.end != null : false;
 
@@ -83,8 +85,7 @@ export class TracesPage {
         scene: TracingRecordScene.Tree,
       });
     },
-    defaultValue: null as RecordsTreeData | null,
-    injector: inject(Injector),
+    defaultValue: null,
   });
 
   public now = new Date();

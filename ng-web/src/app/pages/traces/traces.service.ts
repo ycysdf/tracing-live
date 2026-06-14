@@ -1,4 +1,4 @@
-import { Injectable, signal, computed, inject, resource, Injector } from '@angular/core';
+import { Injectable, signal, computed, inject, resource } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 import {
   NodesService,
@@ -77,7 +77,7 @@ export class TracesService {
   });
 
   // Node page data — reloads automatically when filter changes
-  readonly nodesPageResource = resource({
+  readonly nodesPageResource = resource<NodesPageDto | undefined, TracingTreeFilter>({
     params: () => this.filter(),
     loader: async ({ params: filter }) => {
       return await firstValueFrom(
@@ -87,8 +87,7 @@ export class TracesService {
         ),
       );
     },
-    defaultValue: undefined as unknown as NodesPageDto,
-    injector: inject(Injector),
+    defaultValue: undefined,
   });
 
   // Search

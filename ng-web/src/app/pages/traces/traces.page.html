@@ -53,6 +53,7 @@
       class="flex gap-2 overflow-x-auto small-scrollbar"
       [class.justify-center]="nodesPageLoading()"
     >
+      <div>{{service.nodesPageResource.status()}}</div>
       @if (nodesPageError(); as err) {
         <div class="flex items-center justify-center p-2 text-red-500 text-sm gap-2">
           <span>{{ 'common.error' | translate }}:</span>
