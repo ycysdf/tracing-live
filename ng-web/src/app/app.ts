@@ -5,5 +5,12 @@ import { RouterOutlet } from '@angular/router';
   selector: 'app-root',
   imports: [RouterOutlet],
   template: `<router-outlet />`,
+  styles: [
+    `
+      :host {
+        /*@apply items-center justify-center p-2;*/
+      }
+    `,
+  ],
 })
 export class App {}

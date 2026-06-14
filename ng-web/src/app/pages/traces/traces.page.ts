@@ -10,7 +10,7 @@ import {
   type AppNodeRunDto,
   type TracingRecordDto,
 } from '../../../api';
-import { TranslationService } from '../../i18n/translation.service';
+import { TranslatePipe } from '@ngx-translate/core';
 import { cn } from '../../utils/cn';
 import {
   ALL_LEVELS,
@@ -45,6 +45,7 @@ function formatDuration(ms: number): string {
   providers: [TracesService],
   imports: [
     FormsModule,
+    TranslatePipe,
     LoadingComponent,
     LoadingPanelComponent,
     EmptyComponent,
@@ -56,7 +57,6 @@ function formatDuration(ms: number): string {
 })
 export class TracesPage implements OnDestroy {
   readonly service = inject(TracesService);
-  readonly i18n = inject(TranslationService);
 
   readonly filter = this.service.filter;
   readonly nodesPage = this.service.nodesPage;
