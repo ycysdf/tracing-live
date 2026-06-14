@@ -1,18 +1,15 @@
 import { Injectable, signal, computed, inject } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
-import { firstValueFrom, Observable } from 'rxjs';
+import { firstValueFrom } from 'rxjs';
 import {
   NodesService,
   RecordsService,
   type NodesPageDto,
   type TracingTreeRecordDto,
-  type TracingRecordDto,
-  type CursorInfo,
   TracingKind,
   TracingLevel,
   TracingRecordScene,
 } from '../../../api';
-import { BASE_URL, ALL_LEVELS } from '../../utils/constants';
+import { ALL_LEVELS } from '../../utils/constants';
 
 export type ShowMode = 'Tree' | 'Flatten';
 export const SHOW_MODES: ShowMode[] = ['Tree', 'Flatten'];
@@ -43,9 +40,29 @@ export interface RecordsTreeData {
 
 const COUNT = 50;
 
+/** Typed shape for the tree-records query — isolates the 17-param generated API. */
+interface ListTreeRecordsParams {
+  cursor?: unknown;
+  count?: number | null;
+  search?: string | null;
+  scene?: unknown;
+  appBuildIds?: unknown[] | null;
+  appRunIds?: unknown[] | null;
+  nodeIds?: unknown[] | null;
+  parentId?: string | null;
+  parentSpanTIds?: unknown[] | null;
+  startTime?: string | null;
+  endTime?: string | null;
+  kinds?: unknown[] | null;
+  spanIds?: unknown[] | null;
+  targets?: unknown[] | null;
+  name?: unknown[] | null;
+  fields?: unknown[] | null;
+  levels?: unknown[] | null;
+}
+
 @Injectable()
 export class TracesService {
-  private readonly http = inject(HttpClient);
   private readonly nodesService = inject(NodesService);
   private readonly recordsService = inject(RecordsService);
 
@@ -173,31 +190,27 @@ export class TracesService {
     kinds?: TracingKind[];
   }): Promise<RecordsTreeData | null> {
     const filter = this.filter();
-    const param: any = {
+    const params: ListTreeRecordsParams = {
       count: COUNT + 1,
       kinds: options.kinds ?? [],
       levels: filter.selectedLevels,
-      app_build_ids: filter.selectedAppIds.map(id => [id, null]),
-      node_ids: filter.selectedNodeIds,
-      parent_span_t_ids: [options.parentSpanTId ?? 0],
+      appBuildIds: filter.selectedAppIds.map(id => [id, null]),
+      nodeIds: filter.selectedNodeIds,
+      parentSpanTIds: [options.parentSpanTId ?? 0],
       search: this.search(),
       scene: options.scene,
     };
 
     if (options.appRunId == null && options.scene === 'Tree') {
-      param.app_run_ids = [];
-      param.kinds = [TracingKind.AppStart, TracingKind.AppStop];
-      param.parent_id = undefined;
-      param.levels = undefined;
-    } else {
-      if (options.appRunId != null) {
-        param.app_run_ids = [options.appRunId];
-      }
+      params.appRunIds = [];
+      params.kinds = [TracingKind.AppStart, TracingKind.AppStop];
+      params.levels = undefined;
+    } else if (options.appRunId != null) {
+      params.appRunIds = [options.appRunId];
     }
 
     if (options.spanTId != null) {
-      param.parent_id = undefined;
-      param.fields = [{
+      params.fields = [{
         name: '__data.span_t_id',
         op: 'Equal',
         value: options.spanTId,
@@ -205,13 +218,7 @@ export class TracesService {
     }
 
     try {
-      const records = await firstValueFrom(this.recordsService.listTreeRecords(
-        param.cursor, param.count, param.search, param.scene,
-        param.app_build_ids, param.app_run_ids, param.node_ids,
-        param.parent_id, param.parent_span_t_ids, param.start_time,
-        param.end_time, param.kinds, param.span_ids, param.targets,
-        param.name, param.fields, param.levels
-      ));
+      const records = await firstValueFrom(this.listTreeRecordsSafe(params));
 
       let isEnd = false;
       if (records.length <= COUNT) {
@@ -227,9 +234,14 @@ export class TracesService {
     }
   }
 
-  // SSE subscription for live updates
-  createEventSource(path: string, params: string): EventSource {
-    return new EventSource(`${BASE_URL}${path}?${params}`);
+  private listTreeRecordsSafe(params: ListTreeRecordsParams) {
+    return this.recordsService.listTreeRecords(
+      params.cursor, params.count, params.search, params.scene,
+      params.appBuildIds, params.appRunIds, params.nodeIds,
+      params.parentId, params.parentSpanTIds, params.startTime,
+      params.endTime, params.kinds, params.spanIds, params.targets,
+      params.name, params.fields, params.levels,
+    );
   }
 
   // Navigate trace path
