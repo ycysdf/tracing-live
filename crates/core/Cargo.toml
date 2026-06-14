@@ -14,7 +14,7 @@ std = ["dep:flume", "chrono/now", "xy-rpc/std", "xy-rpc/rt_tokio"]
 
 [dependencies]
 chrono = { version = "0.4", features = ["serde"], default-features = false }
-uuid = { version = "1", features = ["v4"], default-features = false }
+uuid = { version = "1", features = ["v4", "serde"], default-features = false }
 flume = { version = "0.11", optional = true }
 hashbrown = { version = "0.15", features = ["serde", "default-hasher"], default-features = false }
 smol_str = { version = "0.2", features = ["serde"], default-features = false }

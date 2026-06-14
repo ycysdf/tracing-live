@@ -36,7 +36,7 @@ pub fn panic_hook(panic_info: &PanicHookInfo) {
     tracing::error!(
         panic.payload = payload,
         panic.location = location,
-        panic.backtrace = tracing::field::display(backtrace),
+        panic.backtrace = display(backtrace),
         panic.note = note,
         "A panic occurred",
     );
