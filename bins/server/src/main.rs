@@ -6,7 +6,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpSocket};
 use tower_http::compression::CompressionLayer;
-use tracing::{Instrument, error, info, info_span, warn};
+use tracing::{Instrument, error, info_span, warn};
 use tracing_lv_core::catch_panic::program_panic_catch;
 use tracing_lv_core::proto::{AppStartInfo, TLRecordVariant, TracingRecordItem};
 use tracing_lv_core::{MsgReceiverSubscriber, TLAppInfo, TLLayer};
@@ -105,8 +105,7 @@ async fn main() -> anyhow::Result<()> {
         let tracing_service = tracing_service.clone();
         let max_buf_count = env::var("RECORD_MAX_BUF_COUNT")
             .ok()
-            .map(|n| n.parse::<usize>().ok())
-            .flatten();
+            .and_then(|n| n.parse::<usize>().ok());
         async move {
             let max_buf_count_max_value =
                 POSTGRESQL_MAX_BIND_PARAM_COUNT / TracingRecordBatchInserter::BIND_COL_COUNT;
@@ -120,8 +119,7 @@ async fn main() -> anyhow::Result<()> {
                     record_max_delay: Duration::from_millis(
                         env::var("RECORD_MAX_DELAY")
                             .ok()
-                            .map(|n| n.parse::<u64>().ok())
-                            .flatten()
+                            .and_then(|n| n.parse::<u64>().ok())
                             .unwrap_or(200),
                     ),
                     record_max_buf_count,
@@ -140,8 +138,7 @@ async fn main() -> anyhow::Result<()> {
             Ipv4Addr::UNSPECIFIED,
             env::var("WEB_PORT")
                 .ok()
-                .map(|n| n.parse().ok())
-                .flatten()
+                .and_then(|n| n.parse().ok())
                 .unwrap_or(443),
         ));
         axum_server::bind_rustls(
@@ -171,18 +168,17 @@ async fn main() -> anyhow::Result<()> {
             Ipv4Addr::UNSPECIFIED,
             env::var("GRPC_PORT")
                 .ok()
-                .map(|n| n.parse().ok())
-                .flatten()
+                .and_then(|n| n.parse().ok())
                 .unwrap_or(8080),
         ));
         let span = info_span!("tonic grpc server", ?addr);
         let socket = TcpSocket::new_v4()?;
         socket.set_keepalive(true)?;
         socket.bind(addr)?;
-        let mut tcp_listener = socket.listen(1024)?;
+        let tcp_listener = socket.listen(1024)?;
         // let tcp_listener = TcpListener::bind(addr).await?;
 
-        while let Ok((stream, addr)) = tcp_listener.accept().await {
+        while let Ok((stream, _addr)) = tcp_listener.accept().await {
             let (_channel, fut) = ChannelBuilder::new(tracing_lv_core::proto::FORMAT::default())
                 .only_serve({
                     {
@@ -218,7 +214,7 @@ async fn main() -> anyhow::Result<()> {
         //     .instrument(span)
     });
 
-    Ok(tokio::select! {
+    tokio::select! {
         r = https_web_serve_future => {
             r??
         }
@@ -231,5 +227,6 @@ async fn main() -> anyhow::Result<()> {
         r = handle_records_future => {
             r?
         }
-    })
+    }
+    Ok(())
 }

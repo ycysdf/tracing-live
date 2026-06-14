@@ -44,10 +44,6 @@ pub struct TracingServiceImpl {
     pub span: Span,
 }
 
-impl TracingServiceImpl {
-    pub fn new() {}
-}
-
 impl TracingService for TracingServiceImpl {
     fn app_run(
         &self,
@@ -694,8 +690,7 @@ impl AppRunLifetime {
                     },
                 },
             })
-            .inspect_err(|err| error!("send app stop message failed. {err:?}"))
-            .unwrap();
+            .inspect_err(|err| error!("send app stop message failed. {err:?}"))?;
         Ok(())
     }
 }

@@ -7,6 +7,7 @@ use entity::app_build::{ActiveModel, Column};
 use entity::tracing_record::Model;
 use entity::tracing_span::Entity;
 use entity::*;
+use num_enum::{IntoPrimitive, TryFromPrimitive};
 use sea_orm::ActiveValue::{Set, Unchanged};
 use sea_orm::prelude::{BigDecimal, Decimal, Expr, Json, RcOrArc, StringLen};
 use sea_orm::sea_query::extension::postgres::{IntoTypeRef, PgExpr};
@@ -36,7 +37,6 @@ use std::ops::{Add, Range};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
-use num_enum::{IntoPrimitive, TryFromPrimitive};
 use tokio::join;
 use tokio_util::time::FutureExt as _;
 use tracing::{error, info, instrument, warn};
@@ -123,8 +123,8 @@ impl TracingRecordBatchInserter {
         // }
         {
             // write!(&mut self.sql, "'{}',", self.id)?;
-            write!(&mut self.sql, "'{}',", id as i64)?;
-            write!(&mut self.sql, "'{}',", record_index as i64)?;
+            write!(&mut self.sql, "'{}',", id)?;
+            write!(&mut self.sql, "'{}',", record_index)?;
             write!(&mut self.sql, "'{}',", app_info.id)?;
             self.add_arg(app_info.version.as_str())?;
             write!(&mut self.sql, "'{}',", app_info.run_id)?;
@@ -305,10 +305,7 @@ impl From<tracing_span_run::Model> for TracingSpanRunDto {
             run_elapsed: GLOBAL_DATA
                 .get_node_now_timestamp_nanos(n.app_run_id)
                 .map(|node_now| {
-                    Duration::from_nanos(
-                        (node_now - n.run_time.timestamp_nanos_opt().unwrap()) as u64,
-                    )
-                    .as_millis_f64()
+                    (node_now - n.run_time.timestamp_nanos_opt().unwrap()) as f64 / 1_000_000.
                 }),
             run_time: n.run_time,
             busy_duration: n.busy_duration,
@@ -543,10 +540,7 @@ impl From<app_run::Model> for AppRunDto {
             run_elapsed: GLOBAL_DATA
                 .get_node_now_timestamp_nanos(n.id)
                 .map(|node_now| {
-                    Duration::from_nanos(
-                        (node_now - n.start_time.timestamp_nanos_opt().unwrap()) as u64,
-                    )
-                    .as_millis_f64()
+                    (node_now - n.start_time.timestamp_nanos_opt().unwrap()) as f64 / 1_000_000.
                 }),
             data: Arc::new(if let Some(data) = n.data {
                 let serde_json::Value::Object(data) = data else {
@@ -608,7 +602,6 @@ impl TracingService {
         {
             let manager = SchemaManager::new(&self.dc);
             if !manager.has_table("tracing_record").await? {
-                println!("tt");
                 info!("tracing_record table does not exist. start init database!");
                 self.dc
                     .execute_unprepared(include_str!("../sql.sql"))
@@ -660,7 +653,6 @@ impl TracingService {
                     )
                     .await?;
                 }
-                tokio::time::sleep(Duration::from_secs(12)).await;
                 info!("query and  set exception end for other");
                 let exception_app_runs = app_run::Entity::find()
                     .filter(
@@ -892,11 +884,8 @@ impl TracingService {
                         dto.enter_elapsed = GLOBAL_DATA
                             .get_node_now_timestamp_nanos(n.app_run_id)
                             .map(|node_now| {
-                                Duration::from_nanos(
-                                    (node_now - dto.enter_time.timestamp_nanos_opt().unwrap())
-                                        as u64,
-                                )
-                                .as_millis_f64()
+                                (node_now - dto.enter_time.timestamp_nanos_opt().unwrap()) as f64
+                                    / 1_000_000.
                             });
                         dto
                     })
@@ -1700,11 +1689,8 @@ impl From<&TracingTreeRecordDto> for Option<AppRunDto> {
                 run_elapsed: GLOBAL_DATA
                     .get_node_now_timestamp_nanos(value.record.app_run_id)
                     .map(|node_now| {
-                        Duration::from_nanos(
-                            (node_now - value.record.record_time.timestamp_nanos_opt().unwrap())
-                                as u64,
-                        )
-                        .as_millis_f64()
+                        (node_now - value.record.record_time.timestamp_nanos_opt().unwrap()) as f64
+                            / 1_000_000.
                     }),
             })
         } else if value.record.kind == TracingKind::AppStop {
@@ -1723,11 +1709,8 @@ impl From<&TracingTreeRecordDto> for Option<AppRunDto> {
                 run_elapsed: GLOBAL_DATA
                     .get_node_now_timestamp_nanos(value.record.app_run_id)
                     .map(|node_now| {
-                        Duration::from_nanos(
-                            (node_now - value.record.record_time.timestamp_nanos_opt().unwrap())
-                                as u64,
-                        )
-                        .as_millis_f64()
+                        (node_now - value.record.record_time.timestamp_nanos_opt().unwrap()) as f64
+                            / 1_000_000.
                     }),
             })
         } else {
@@ -1782,7 +1765,7 @@ impl From<&TracingTreeRecordDto> for Option<AppRunDto> {
 //     }
 // }
 
-impl From<tracing_record::Model> for TracingRecordDto {
+impl From<Model> for TracingRecordDto {
     fn from(n: Model) -> Self {
         let (span_id_is_stable, span_t_id, repeated_count, fields) = if let Some(value) = n.fields {
             let serde_json::Value::Object(mut fields) = value else {
