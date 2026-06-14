@@ -1,0 +1,14 @@
+{
+  "translation": {
+    "overview": "Overview",
+    "trace": "Trace",
+    "node": "Node",
+    "app": "App",
+    "notify": "Notify",
+    "setting": "Setting"
+  },
+  "common": {
+    "noData": "No Data",
+    "search": "Search"
+  }
+}
