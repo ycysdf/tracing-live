@@ -1,4 +1,4 @@
-import { Injectable, signal, computed, inject, resource } from '@angular/core';
+import { Injectable, signal, computed, inject, resource, Injector } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 import {
   NodesService,
@@ -87,6 +87,8 @@ export class TracesService {
         ),
       );
     },
+    defaultValue: undefined as unknown as NodesPageDto,
+    injector: inject(Injector),
   });
 
   // Search

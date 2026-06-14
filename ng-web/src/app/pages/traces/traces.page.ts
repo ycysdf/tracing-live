@@ -1,4 +1,4 @@
-import { Component, computed, inject, effect, resource } from '@angular/core';
+import { Component, computed, inject, effect, resource, Injector } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import {
   TracingKind,
@@ -84,6 +84,7 @@ export class TracesPage {
       });
     },
     defaultValue: null as RecordsTreeData | null,
+    injector: inject(Injector),
   });
 
   public now = new Date();
